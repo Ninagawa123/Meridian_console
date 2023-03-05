@@ -71,10 +71,10 @@ import struct
 # 定数
 TITLE_VERSION="Meridian_Console_v23.0305" # DPGのウィンドウタイトル兼バージョン表示
 
-UDP_RESV_IP="192.168.1.16" # このPCのIPアドレス
+UDP_RESV_IP="192.168.1.xx" # このPCのIPアドレス
 UDP_RESV_PORT=22222       # 受信ポート
 
-UDP_SEND_IP="192.168.1.20" # 送信先のESP32のIPアドレス
+UDP_SEND_IP="192.168.1.xx" # 送信先のESP32のIPアドレス
 UDP_SEND_PORT=22224       # 送信ポート
 
 MSG_SIZE = 90             # Meridim配列の長さ(デフォルトは90)
