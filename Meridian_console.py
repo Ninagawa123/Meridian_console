@@ -8,28 +8,47 @@
 # Meridian console 取扱説明書
 # 
 # ・起動方法
-# 当ファイルがあるディレクトリにて、ターミナルより
+# 当ファイルがあるディレクトリにて, ターミナルより
 # python3 Meridian_console.py
-# と入力して実行します。必要に応じてライブラリをpip3で追加してください
+# と入力して実行します. 必要に応じてライブラリをpip3で追加してください
 # UDP_RESV_IP,UDP_SEND_IPについては予め調べスクリプト上で書き換えておく必要があります
 # UDP_RESV_IPはターミナルにてip a もしくはipconfig, ifconfig等で調べられます
 # UDP_SEND_IPはESP32の起動時にPCシリアルモニタ上に表示されます
+# ROSの環境で使用する場合は、63行目あたりのimport rospyとfrom sensor_msgs.msg import JointState
+# をアンコメントアウトしてください
 # 
-# ・画面について
-# Command画面
+# ・各ウィンドウについて
+#【Axis Monitor】
+# 各サーボの値です. パワーオン時にはスライダでサーボを動かすことができます.
+#
+#【Sensor Monitor】
+# MIUのデータを表示します. rol,pit,yawはセンサフュージョン値です. SetYawボタンでヨー軸の中央値をリセットできます
+#
+#【Command】
 # POWER: 全サーボのパワーをオンオフします
-# Action: サインカーブの首振りモーションを送信します
+# ->ESP32: ESP32から受信したデータを外部出力用として有効にします
+# <-ESP32: 外部入力データおよびコンソール計算結果のESP32への送信を有効にします
 # ->ROS1: ROS1のjointデータをパブリッシュします（Rvisと連動できます）
-# <-ROS1: ROS1のサブスクライブですが未実装です
+# <-ROS1: ROS1のサブスクライブします（動作未確認）
+# <-DEMO: サインカーブの全身モーションを計算します（<-ESP32オンで送信）
 # Control Pad Monitor: リモコンの入力状態を標準化して表示します
-# Message画面
+# 
+#【Mini Terminal】
+# Meridim配列のデータをインプットし8つまで同時送信することができます.
+# MeridianのIndex（Meridim90であれば0~89）とDataを入力し、Setボタンを押し、
+# Sendにチェックを入れることでデータが送信されます。
+# ※Setを行うことでバッファにデータがセットされ、Sendのチェックを入れることでそのデータが送信されつづけます。
+# 　Indexの範囲外のデータは無効となり送信されません。また、チェックを外した時に送信バッファの各Indexに-1が代入されます。
+# 
+#【Button Input】
+# コンソールからリモコンボタン押下情報を送信します
+# 
+#【Message】
 # IPと各経路のエラーカウント、エラー率、フレーム数、動作周波数を表示します
 # ResetCounter: カウンタの値をリセットするボタンです
 # TsySKIP, PcSKIP: 連番データの取りこぼし数を表示します
-# Sensor Monitor: MIUのデータを表示します。rol,pit,yawはセンサフュージョン値です。SetYawボタンでヨー軸の中央値をリセットできます
-# Axis Monitor: 各サーボの値です。パワーオン時にはスライダでサーボを動かすことができます
 # PS4リモコン接続時に受信スキップ回数が5%ほど検出されるのは、現在の仕様では正常な動作です
-# Button Input画面
+# Button Inputウィンドウ
 # コンソールからリモコンボタン押下情報を送信します
 
 from ast import Pass
@@ -45,17 +64,17 @@ import time
 import atexit
 import struct
 
-# ROS 搭載マシンの場合は、下記の２行をアンコメントアウトしてください
+# ※ROS 搭載マシンの場合は、下記の２行をアンコメントアウトしてください
 # import rospy
 # from sensor_msgs.msg import JointState
 
 # 定数
-TITLE_VERSION="Meridian_Console_v22.0730" # DPGのウィンドウタイトル兼バージョン表示
+TITLE_VERSION="Meridian_Console_v23.0305" # DPGのウィンドウタイトル兼バージョン表示
 
-UDP_RESV_IP="192.168.1.xx" # このPCのIPアドレス
+UDP_RESV_IP="192.168.1.16" # このPCのIPアドレス
 UDP_RESV_PORT=22222       # 受信ポート
 
-UDP_SEND_IP="192.168.1.xx" # 送信先のESP32のIPアドレス
+UDP_SEND_IP="192.168.1.20" # 送信先のESP32のIPアドレス
 UDP_SEND_PORT=22224       # 送信ポート
 
 MSG_SIZE = 90             # Meridim配列の長さ(デフォルトは90)
@@ -69,21 +88,30 @@ STEP = 94      # 1フレームあたりに増加させる制御処理用の数�
 CMD_SET_YAW_CENTER = 10002 # IMUのヨー軸センターリセットコマンド
 
 # 制御コマンド用フラグ等
-flag_update_yaw = 0   # IMUのヨー軸センターリセットフラグ(python内部用)
-flag_servo_power = 0  # 全サーボのパワーオンオフフラグ
-flag_udp_resv = 0     # UDP受信の完了フラグ
-flag_resv_data = 0    # ESP32からの状態データの受信のオンオフフラグ（モーション送信時のシミュレーション空間用として）
-flag_send_data = 0    # ESP32への状態データの送信のオンオフフラグ（サーボパワーオフでもデータ送信可能にすべく）
-flag_send_virtual = 0 # ハードウェアを接続しないで動作させる場合のバーチャルハードのオンオフフラグ
-flag_send_motion = 0  # 計算モーション送信のオンオフフラグ
-flag_demo_action = 0  # デモ/テスト用の計算モーション送信のオンオフフラグ
-flag_ros1_pub = 0     # ROS1のjoint_statesのパブリッシュ
-flag_ros1_sub = 0     # ROS1のjoint_statesのサブスクライブ
-flag_ros1 = 0         # ROS1の起動init（初回のみ）
+main_command = MSG_SIZE # meridim[0]に格納するコマンド番号
+flag_update_yaw = 0     # IMUのヨー軸センターリセットフラグ(python内部用)
+flag_servo_power = 0    # 全サーボのパワーオンオフフラグ
+flag_udp_resv = 0       # UDP受信の完了フラグ
+flag_resv_data = 0      # ESP32からの状態データの受信のオンオフフラグ（モーション送信時のシミュレーション空間用として）
+flag_send_data = 0      # ESP32への状態データの送信のオンオフフラグ（サーボパワーオフでもデータ送信可能にすべく）
+flag_send_virtual = 0   # ハードウェアを接続しないで動作させる場合のバーチャルハードのオンオフフラグ
+flag_send_motion = 0    # 計算モーション送信のオンオフフラグ
+flag_send_miniterminal_data = 0    # ESP32への状態データの送信のオンオフフラグ（サーボパワーオフでもデータ送信可能にすべく）
+flag_set_miniterminal_data = 0    # ミニターミナルの値をセットするボタンのためのフラグ
+flag_tarminal_mode_send = 0   # miniterminalを有効にし、コマンドを優先する。
+flag_demo_action = 0    # デモ/テスト用の計算モーション送信のオンオフフラグ
+flag_ros1_pub = 0       # ROS1のjoint_statesのパブリッシュ
+flag_ros1_sub = 0       # ROS1のjoint_statesのサブスクライブ
+flag_ros1 = 0           # ROS1の起動init（初回のみ）
+flag_set_flow = 0       # Meridanの循環を通常モードに
+flag_set_step = 0       
+# Meridanの循環をステップ（PCからの待ち受け）モードに
 pad_button_panel_short = np.array([0], dtype=np.uint16) # コンパネからのリモコン入力用
 
+command_send_trial = 1 # Commandを連続で送信する回数
+
 # UDP用のsocket設定
-sock=socket.socket(socket.AF_INET,socket.SOCK_DGRAM) 
+sock = socket.socket(socket.AF_INET,socket.SOCK_DGRAM) 
 sock.bind((UDP_RESV_IP,UDP_RESV_PORT))
 
 # エラー集計表示用変数
@@ -99,6 +127,8 @@ error_count_pc_skip = 0    # PCが受信したデータがクロックカウン�
 frame_sync_s = 0           # 送信するframe_sync_r(0-59999)
 frame_sync_r_expect = 0    # 毎フレームカウントし、受信カウントと比較(0-59999)
 frame_sync_r_resv = 0      # 今回受信したframe_sync_r
+frame_sync_r_last = 0      # 前回受信したframe_sync_r
+
 start = 0
 
 # Meridim配列関連
@@ -108,6 +138,8 @@ s_meridim=[0]*MSG_SIZE             # Meridim配列の送信値用
 s_meridim_js_sub=[0]*MSG_SIZE      # ROSからサブスクライブしたサーボ位置情報の格納用Meridim配列
 s_meridim_motion=[0]*MSG_SIZE      # Meridim配列のPC側で作成したサーボ位置命令送信用
 s_meridim_motion_keep=[0]*MSG_SIZE # Meridim配列のパワーオン時の位置キープ用
+s_minitermnal_keep = np.empty((8,2)) # コンパネからのリモコン入力用
+ # Meridim配列のパワーオン時の位置キープ用
 
 # メッセージ表示用
 message0 = "This PC's IP adress is "+UDP_RESV_IP
@@ -167,6 +199,37 @@ def meridian_loop():
     global x
     global y
     global flag_udp_resv
+    global loop_count
+    global r_meridim
+    global s_meridim
+    global r_meridim_char
+    global s_meridim_motion
+    global error_count_pc_to_esp
+    global error_count_esp_to_tsy
+    global error_count_tsy_delay
+    global error_count_tsy_to_esp
+    global error_count_esp_to_pc
+    global error_count_esp_skip
+    global error_count_tsy_skip
+    global error_count_pc_skip
+    global frame_sync_s
+    global frame_sync_r_expect
+    global frame_sync_r_resv
+    global frame_sync_r_last
+    global flag_servo_power
+    global flag_demo_action
+    global flag_send_data
+    global flag_resv_data
+    global flag_ros1_pub
+    global flag_ros1_sub
+    global flag_set_flow
+    global flag_set_step
+    global flag_update_yaw
+    global pad_button_panel_short
+    global flag_tarminal_mode_send
+    global flag_set_miniterminal_data
+    global flag_send_miniterminal_data
+    global s_minitermnal_keep
 
     while (True):
         print("Start.")
@@ -177,29 +240,7 @@ def meridian_loop():
         message1 = "Waiting for UDP data from "+UDP_SEND_IP+"..."
         with closing(sock):
             while True:
-                global loop_count
-                global r_meridim
-                global s_meridim
-                global r_meridim_char
-                global s_meridim_motion
-                global error_count_pc_to_esp
-                global error_count_esp_to_tsy
-                global error_count_tsy_delay
-                global error_count_tsy_to_esp
-                global error_count_esp_to_pc
-                global error_count_esp_skip
-                global error_count_tsy_skip
-                global error_count_pc_skip
-                global frame_sync_s
-                global frame_sync_r_expect
-                global frame_sync_r_resv
-                global flag_servo_power
-                global flag_demo_action
-                global flag_send_data
-                global flag_resv_data
-                global flag_ros1_pub
-                global flag_ros1_sub
-                global pad_button_panel_short
+
 
                 loop_count += 1 # このpythonを起動してからのフレーム数をカウントアップ
 
@@ -209,11 +250,12 @@ def meridian_loop():
                 while r_bin_data_past == r_bin_data:          # ここで受信データの更新を待つ
                     r_bin_data,addr = sock.recvfrom(MSG_BUFF) # UDPに受信したデータを転記してキープ
 
-                r_meridim=struct.unpack('90h',r_bin_data)         # short型のMeridim90を作成
-                r_meridim_char=struct.unpack('180b',r_bin_data)   # 読み取り用のchar型Meridim(180)を作成
+                r_meridim = struct.unpack('90h',r_bin_data)         # short型のMeridim90を作成
+                r_meridim_ushort = struct.unpack('90H',r_bin_data)  # unsignedshort型のMeridim90を作成
+                r_meridim_char = struct.unpack('180b',r_bin_data)   # 読み取り用のchar型Meridim(180)を作成
                 message1 = "UDP data receiving from "+UDP_SEND_IP # 受信中のメッセージ表示
 
-                # 受信データに対するチェックサムの実行
+                # 受信データに対するチェックサム値の計算
                 checksum = np.array([0], dtype=np.int16)
                 for i in  range(MSG_SIZE-1):
                     checksum[0] += r_meridim[i]
@@ -233,154 +275,200 @@ def meridian_loop():
                         error_count_tsy_delay += 1
                     if (r_meridim[MSG_ERRS] >> 10 & 1) == 1:# エラーフラグ10ビット目（ESPのPCからのUDP受信のフレーム連番スキップフラグ）を調べる
                         error_count_esp_skip += 1
-                    if (r_meridim[MSG_ERRS] >> 9 & 1) == 1:# エラーフラグ9ビット目（TeensyのESP経由のPCから受信のフレーム連番スキップフラグ）を調べる
+                    if (r_meridim[MSG_ERRS] >> 9 & 1)  == 1:# エラーフラグ9ビット目（TeensyのESP経由のPCから受信のフレーム連番スキップフラグ）を調べる
                         error_count_tsy_skip += 1 
                     temp_int16[0] = r_meridim[MSG_ERRS] & 0b0111111111111111 # エラーフラグ15ビット目(PCのUDP受信エラーフラグ)を下げる
                 else:
                     temp_int16[0] = r_meridim[MSG_ERRS] | 0b1000000000000000 # エラーフラグ15ビット目(PCのUDP受信エラーフラグ)を上げる                    
                     error_count_esp_to_pc += 1 # PCのUDP受信エラーをカウントアップ
 
-                # 受信予測用のカウントアップ
-                frame_sync_r_expect += 1
-                if frame_sync_r_expect > 29999:
-                    frame_sync_r_expect = -30000
-
                 # フレームスキップチェック用のカウントの受信と処理
-                frame_sync_r_resv = r_meridim[1] # 受信カウントを代入
+                frame_sync_r_resv = r_meridim_ushort[1] # 受信カウントを代入
+                                
+                # チェックサムがOK かつ シーケンス番号が前回と異なっていれば、処理に回す
+                if (checksum[0] == r_meridim[MSG_SIZE-1]) and (frame_sync_r_resv != frame_sync_r_last): 
 
-                if(frame_sync_r_resv == frame_sync_r_expect): # 受信したカウントが予想通りであればスキップなし
-                    temp_int16[0] &= 0b1111111011111111       # PCのESP経由Teensyからの連番スキップフラグを下げる
-                else:
-                    # print("Found data unsync on PC.")
-                    temp_int16[0] |= 0b0000000100000000       # PCのESP経由Teensyからの連番スキップフラグを上げる
-                    frame_sync_r_expect = frame_sync_r_resv   # 受信カウントの方が多ければズレを検出し、追いつく
-                    error_count_pc_skip += 1 # スキップカウントをプラス
+                    #受信データを送信データに転記
+                    for i in  range(MSG_SIZE-1):
+                        s_meridim[i]=r_meridim[i]
 
-                # 送信用シーケンシャルカウントの準備
-                frame_sync_s += 1 # 送信用のframe_sync_sをカウントアップ
-                if frame_sync_s > 29999:
-                    frame_sync_s = -30000
+                    # 受信予測用のカウントアップ
+                    frame_sync_r_expect += 1
+                    if frame_sync_r_expect > 59999:
+                        frame_sync_r_expect = 0
 
-                # PC側サーボ位置発信用に最終サーボ情報をキープ
-                if flag_servo_power == 2: # サーボオンボタン押下初回のみ最終受け取りサーボ情報をキープ
-                    for i in  range(21,81,2):
-                        s_meridim_motion[i] = r_meridim[i]
-                        s_meridim_motion_keep[i] = r_meridim[i]
-                    flag_servo_power = 1
+                    if(frame_sync_r_resv == frame_sync_r_expect): # 受信したカウントが予想通りであればスキップなし
+                        temp_int16[0] &= 0b1111111011111111       # PCのESP経由Teensyからの連番スキップフラグを下げる
+                    else:
+                        # print("Found data unsync on PC.")
+                        temp_int16[0] |= 0b0000000100000000       # PCのESP経由Teensyからの連番スキップフラグを上げる
+                        frame_sync_r_expect = frame_sync_r_resv   # 受信カウントの方が多ければズレを検出し、追いつく
+                        error_count_pc_skip += 1 # スキップカウントをプラス
 
-                # 送信用のモーションを作成（①受信値そのまま ②ROSサブスク反映 ③計算モーション）
-                if checksum[0] == r_meridim[MSG_SIZE-1]: # 受信成功時はデータ更新
-                    s_meridim=[] # データのクリア
-                    s_meridim=list(r_meridim)
+                    # 送信用シーケンス番号の準備
+                    frame_sync_s += 1 # 送信用のframe_sync_sをカウントアップ
+                    if frame_sync_s > 59999:
+                        frame_sync_s = 0
 
-                # ①受信値そのままの場合：送信データのベースを受信データのコピーで作成
-                if flag_servo_power:# サーボパワーオン時は、電源入力時に保持した値を固定で流す（ハウリング的なサーボ位置ズレの増幅を防止）
+                    # PC側サーボ位置発信用に最終サーボ情報をキープ
+                    if flag_servo_power == 2: # サーボオンボタン押下初回のみ最終受け取りサーボ情報をキープ
                         for i in  range(21,81,2):
-                            s_meridim[i] = s_meridim_motion_keep[i]
-                else:
-                    if flag_resv_data:
-                        for i in  range(21,81,2):# 受信サーボ値を書き込みモーションのベースとして一旦キープ
                             s_meridim_motion[i] = r_meridim[i]
+                            s_meridim_motion_keep[i] = r_meridim[i]
+                        flag_servo_power = 1
 
-                # ②サーボ位置にROSのサブスクライブを反映させる場合にはここでデータを作成★★
-                if flag_ros1_sub:
-                    for i in  range(11):
-                        s_meridim_motion[21+i*2] = s_meridim_js_sub[21+i*2]
-                        s_meridim_motion[51+i*2] = s_meridim_js_sub[51+i*2]
+                    # 送信用のモーションを作成（①受信値そのまま ②ROSサブスク反映 ③計算モーション）
+                    if checksum[0] == r_meridim[MSG_SIZE-1]: # 受信成功時はデータ更新
+                        s_meridim=[] # データのクリア
+                        s_meridim=list(r_meridim)
 
-                # ③サーボ位置をここで計算制御する場合は以下でデータを作成(まずはデモモーションのみで運用テスト)
-                if flag_demo_action: # 
-                    # xをフレームごとにカウントアップ
-                    x += math.pi/STEP
-                    if x>math.pi*2000:
-                        x = 0
-                    # サインカーブで全身をくねらせる様にダンス
-                    s_meridim_motion[21] = int(np.sin(x)*3000)          # 頭ヨー
-                    s_meridim_motion[23] = int(np.sin(x)*1000) +2000    # 左肩ピッチ
-                    s_meridim_motion[25] = -int(np.sin(x*2)*1000) +1000 # 左肩ロール
-                    s_meridim_motion[27] = int(np.sin(x)*1000) +1000    # 左肘ヨー
-                    s_meridim_motion[29] = int(np.sin(x)*3000) -3000    # 左肘ピッチ
-                    s_meridim_motion[31] = int(np.sin(x)*500)           # 左股ヨー
-                    s_meridim_motion[33] = -int(np.sin(x)*400)          # 左股ロール
-                    s_meridim_motion[35] = int(np.sin(x*2)*2000) -200   # 左股ピッチ
-                    s_meridim_motion[37] = -int(np.sin(x*2)*4000)       # 左膝ピッチ
-                    s_meridim_motion[39] = int(np.sin(x*2)*2000)  - 200 # 左足首ピッチ
-                    s_meridim_motion[41] = int(np.sin(x)*400)           # 左足首ロール
-                    s_meridim_motion[51] = -int(np.sin(x)*2000)         # 腰ヨー
-                    s_meridim_motion[53] = -int(np.sin(x)*1000) +2000   # 右肩ピッチ
-                    s_meridim_motion[55] = -int(np.sin(x*2)*1000) +1000 # 右肩ロール
-                    s_meridim_motion[57] = -int(np.sin(x)*1000) +1000   # 右肘ヨー
-                    s_meridim_motion[59] = -int(np.sin(x)*3000) -3000   # 右肘ピッチ
-                    s_meridim_motion[61] = -int(np.sin(x)*500)          # 右股ヨー
-                    s_meridim_motion[63] = int(np.sin(x)*400)           # 右股ロール
-                    s_meridim_motion[65] = -int(np.sin(x*2)*2000) -200  # 右股ピッチ
-                    s_meridim_motion[67] = int(np.sin(x*2)*4000)        # 右膝ピッチ
-                    s_meridim_motion[69] = -int(np.sin(x*2)*2000) -200  # 右足首ピッチ
-                    s_meridim_motion[71] = -int(np.sin(x)*400)          # 右足首ロール
+                    # ①受信値そのままの場合：送信データのベースを受信データのコピーで作成
+                    if flag_servo_power:# サーボパワーオン時は、電源入力時に保持した値を固定で流す（ハウリング的なサーボ位置ズレの増幅を防止）
+                            for i in  range(21,81,2):
+                                s_meridim[i] = s_meridim_motion_keep[i]
+                    else:
+                        if flag_resv_data:
+                            for i in  range(21,81,2):# 受信サーボ値を書き込みモーションのベースとして一旦キープ
+                                s_meridim_motion[i] = r_meridim[i]
 
-        # データを送信Meridim配列に格納
+                    # ②サーボ位置にROSのサブスクライブを反映させる場合にはここでデータを作成★★
+                    if flag_ros1_sub:
+                        for i in  range(15):
+                            s_meridim_motion[21+i*2] = s_meridim_js_sub[21+i*2]
+                            s_meridim_motion[51+i*2] = s_meridim_js_sub[51+i*2]
 
-                # サーボオンオフフラグチェック：サーボオンフラグを格納
-                if flag_servo_power > 0:
-                    for i in  range(20,80,2):
-                        s_meridim[i] = 1
+                    # ③サーボ位置をここで計算制御する場合は以下でデータを作成(まずはデモモーションのみで運用テスト)
+                    if flag_demo_action: # 
+                        # xをフレームごとにカウントアップ
+                        x += math.pi/STEP
+                        if x>math.pi*2000:
+                            x = 0
+                        # サインカーブで全身をくねらせる様にダンス
+                        s_meridim_motion[21] = int(np.sin(x)*3000)          # 頭ヨー
+                        s_meridim_motion[23] = int(np.sin(x)*1000) +2000    # 左肩ピッチ
+                        s_meridim_motion[25] = -int(np.sin(x*2)*1000) +1000 # 左肩ロール
+                        s_meridim_motion[27] = int(np.sin(x)*1000) +1000    # 左肘ヨー
+                        s_meridim_motion[29] = int(np.sin(x)*3000) -3000    # 左肘ピッチ
+                        s_meridim_motion[31] = int(np.sin(x)*500)           # 左股ヨー
+                        s_meridim_motion[33] = -int(np.sin(x)*400)          # 左股ロール
+                        s_meridim_motion[35] = int(np.sin(x*2)*2000) -200   # 左股ピッチ
+                        s_meridim_motion[37] = -int(np.sin(x*2)*4000)       # 左膝ピッチ
+                        s_meridim_motion[39] = int(np.sin(x*2)*2000)  - 200 # 左足首ピッチ
+                        s_meridim_motion[41] = int(np.sin(x)*400)           # 左足首ロール
+                        s_meridim_motion[51] = -int(np.sin(x)*2000)         # 腰ヨー
+                        s_meridim_motion[53] = -int(np.sin(x)*1000) +2000   # 右肩ピッチ
+                        s_meridim_motion[55] = -int(np.sin(x*2)*1000) +1000 # 右肩ロール
+                        s_meridim_motion[57] = -int(np.sin(x)*1000) +1000   # 右肘ヨー
+                        s_meridim_motion[59] = -int(np.sin(x)*3000) -3000   # 右肘ピッチ
+                        s_meridim_motion[61] = -int(np.sin(x)*500)          # 右股ヨー
+                        s_meridim_motion[63] = int(np.sin(x)*400)           # 右股ロール
+                        s_meridim_motion[65] = -int(np.sin(x*2)*2000) -200  # 右股ピッチ
+                        s_meridim_motion[67] = int(np.sin(x*2)*4000)        # 右膝ピッチ
+                        s_meridim_motion[69] = -int(np.sin(x*2)*2000) -200  # 右足首ピッチ
+                        s_meridim_motion[71] = -int(np.sin(x)*400)          # 右足首ロール
+
+                    # データを送信Meridim配列に格納
+
+                    # コマンド値の生成と格納
+
+                    # マスターコマンドフラグチェック：ヨー軸センターリセットコマンドを格納
+                    if (flag_update_yaw > 0):
+                        flag_update_yaw -= 1 
+                        s_meridim[0] = CMD_SET_YAW_CENTER
+                        if (flag_update_yaw==0):
+                            print("Send COMMAND 'Set Yaw Center.':["+str(CMD_SET_YAW_CENTER)+"]")
+
+                    elif flag_set_flow == 1: # フローモードへの切り替え
+                        s_meridim[0] = 5 # 5 はフローモード
+                        flag_set_flow = 0
+
+                    elif flag_set_step == 1: # ステップモードへの切り替え
+                        s_meridim[0] = 6 # 6 はステップモード
+                        flag_set_step = 0
+                    else:
+                        s_meridim[0] = MSG_SIZE #デフォルト値を格納
+
+                    # PC側発行のサーボ位置を格納
+                    if flag_send_data:
+                        for i in  range(21,81,2):
+                            s_meridim[i] = s_meridim_motion[i]
+
+                    # サーボオンオフフラグチェック：サーボオンフラグを格納
+                    if flag_servo_power > 0:
+                        for i in  range(20,80,2):
+                            s_meridim[i] = 1
+                    else:
+                        for i in  range(20,80,2):
+                            s_meridim[i] = 0
+
+                    # シーケンス番号を格納. unsigned short として取り出せるようなsinged shortに変換
+                    if frame_sync_s > 32767:
+                        s_meridim[1] = -(65536 - frame_sync_s)
+                    else:
+                        s_meridim[1] = frame_sync_s
+
+                    # リモコンデータをリセットし、PCからのリモコン入力値を格納
+                    temp = np.array([0], dtype=np.int16)
+                    temp[0] = 0
+                    temp[0] = pad_button_panel_short[0] # ボタンのショート型変換
+                    s_meridim[15] = temp[0] # ボタン
+                    s_meridim[16] =0 # アナログ1
+                    s_meridim[17] =0 # アナログ2
+                    s_meridim[18] =0 # アナログ3
+
+                    # キープしたエラーフラグを格納
+                    s_meridim[MSG_ERRS] = temp_int16[0]
+
+                    # miniterminalがモードオンならセットされた送信データを送信
+                    if flag_tarminal_mode_send > 0: # ミニターミナルからの入力データをセットする
+                        print_string =""
+                        for i in range(8):
+                            if ((s_minitermnal_keep[i][0] >= 0) and (s_minitermnal_keep[i][0]  < MSG_SIZE)):
+                                s_meridim[int(s_minitermnal_keep[i][0])] = int(s_minitermnal_keep[i][1])
+                                print_string = print_string+"["+str(int(s_minitermnal_keep[i][0]))+"] "+str(int(s_minitermnal_keep[i][1]))+", "
+                                #サーボパワーオン時のキープ配列にも反映しておく。こうするとミニターミナルから脱力してサーボを回転させた後にサーボパワーオンで位置の固定ができる。
+                                s_meridim_motion_keep[int(s_minitermnal_keep[i][0])] = int(s_minitermnal_keep[i][1]) 
+                        
+                        if flag_tarminal_mode_send == 2: # 送信データを一回表示
+                            print("Sending data : ")
+                            print(print_string[:-2]) #末尾のカンマ以外を表示
+                            flag_tarminal_mode_send = 1
+
+                    #print("Resv Meridim[0]:        "+str(r_meridim[0]))
+                    #print("Send Meridim[0]:        "+str(s_meridim[0]))
+                    #print(s_minitermnal_keep)
+
+
+                    # 格納した送信データについてチェックサムを追加
+                    checksum[0] = 0
+                    checksum_int = 0
+                    for i in  range(MSG_SIZE-1):
+                        checksum_int += s_meridim[i]
+                    checksum[0] = ~checksum_int
+                    s_meridim[MSG_SIZE-1]=checksum[0]
+
+                    # データをパックしてUDP送信
+                    s_bin_data=struct.pack('90h',*s_meridim)
+                    sock.sendto(s_bin_data,(UDP_SEND_IP,UDP_SEND_PORT))
+
+                    now = time.time()-start+0.0001
+
+                    message2="ERROR COUNT ESP-PC:"+str("{:}".format(error_count_esp_to_pc))+\
+                        " PC-ESP:"+str("{:}".format(error_count_pc_to_esp))+" ESP-TSY:"+str("{:}".format(error_count_esp_to_tsy)) + " TSY_Delay:"+str("{:}".format(error_count_tsy_delay))
+
+                    message3="ERROR RATE ESP-PC:"+str("{:.2%}".format(error_count_esp_to_pc/loop_count))+\
+                        " PC-ESP:"+str("{:.2%}".format(error_count_pc_to_esp/loop_count))+" ESP-TSY:"+str("{:.2%}".format(error_count_esp_to_tsy/loop_count))+\
+                        " TsySKIP:"+str("{:.2%}".format(error_count_tsy_skip/loop_count))+" ESPSKIP:"+str("{:.2%}".format(error_count_esp_skip/loop_count))
+
+                    message4="SKIP COUNT TsySKIP:"+\
+                        str("{:}".format(error_count_tsy_skip))+" ESPSKIP:"+str("{:}".format(error_count_esp_skip))+" PcSKIP:"+str("{:}".format(error_count_pc_skip))+\
+                        " PCf:"+str(loop_count)+" BOARDf:"+str(frame_sync_r_resv)+" "+str(int(loop_count/now))+"Hz"
+                    
+                    #今回受信のシーケンス番号を次回比較用にキープ
+                    frame_sync_r_last = frame_sync_r_resv
+                
                 else:
-                    for i in  range(20,80,2):
-                        s_meridim[i] = 0
-
-                # PC側発行のサーボ位置を格納
-                if flag_send_data:
-                    for i in  range(21,81,2):
-                        s_meridim[i] = s_meridim_motion[i]
-
-                # マスターコマンドフラグチェック：ヨー軸センターリセットコマンドを格納
-                global flag_update_yaw
-                if (flag_update_yaw > 0):
-                    flag_update_yaw -= 1 
-                    s_meridim[0] = CMD_SET_YAW_CENTER
-                    if (flag_update_yaw==0):
-                        print("Send COMMAND 'Set Yaw Center.':["+str(CMD_SET_YAW_CENTER)+"]")
-
-                # シーケンシャルカウントを格納
-                s_meridim[1] = frame_sync_s
-
-
-                # リモコンデータをリセットし、PCからのリモコン入力値を格納
-                temp = np.array([0], dtype=np.int16)
-                temp[0] = 0
-                temp[0] = pad_button_panel_short[0] # ボタンのショート型変換
-                s_meridim[15] = temp[0] # ボタン
-                s_meridim[16] =0 # アナログ1
-                s_meridim[17] =0 # アナログ2
-                s_meridim[18] =0 # アナログ3
-
-                # キープしたエラーフラグを格納
-                s_meridim[MSG_ERRS] = temp_int16[0]
-
-                # 格納した送信データについてチェックサムを追加
-                checksum[0] = 0
-                checksum_int = 0
-                for i in  range(MSG_SIZE-1):
-                    checksum_int += s_meridim[i]
-                checksum[0] = ~checksum_int
-                s_meridim[MSG_SIZE-1]=checksum[0]
-
-                # データをパックしてUDP送信
-                s_bin_data=struct.pack('90h',*s_meridim)
-                sock.sendto(s_bin_data,(UDP_SEND_IP,UDP_SEND_PORT))
-
-                now = time.time()-start+0.0001
-
-                message2="ERROR COUNT ESP-PC:"+str("{:}".format(error_count_esp_to_pc))+\
-                    " PC-ESP:"+str("{:}".format(error_count_pc_to_esp))+" ESP-TSY:"+str("{:}".format(error_count_esp_to_tsy)) + " TSY_Delay:"+str("{:}".format(error_count_tsy_delay))
-
-                message3="ERROR RATE ESP-PC:"+str("{:.2%}".format(error_count_esp_to_pc/loop_count))+\
-                    " PC-ESP:"+str("{:.2%}".format(error_count_pc_to_esp/loop_count))+" ESP-TSY:"+str("{:.2%}".format(error_count_esp_to_tsy/loop_count))+\
-                    " TsySKIP:"+str("{:.2%}".format(error_count_tsy_skip/loop_count))+" ESPSKIP:"+str("{:.2%}".format(error_count_esp_skip/loop_count))
-
-                message4="SKIP COUNT TsySKIP:"+\
-                    str("{:}".format(error_count_tsy_skip))+" ESPSKIP:"+str("{:}".format(error_count_esp_skip))+" PcSKIP:"+str("{:}".format(error_count_pc_skip))+\
-                    " PCf:"+str(loop_count)+" BOARDf:"+str(frame_sync_r_resv)+" "+str(int(loop_count/now))+"Hz"
+                    print("pass************")      
 
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
 # 関 数 各 種 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
@@ -388,7 +476,7 @@ def meridian_loop():
 
 def cleanup():# ctrl+cで終了したときにも確実にソケットを閉じる試み（いまのところ機能していないかも）
     print("Meridan_console quited.")
-atexit.register(cleanup)# この行は機能しているかどうかわからない
+    #atexit.register(cleanup)# この行は機能しているかどうかわからない
 
 def pad_btn_panel_on(sender, app_data, user_data):# チェックボックスに従いサーボパワーオンフラグをオンオフ
     global pad_button_panel_short
@@ -434,6 +522,56 @@ def set_send_data():# チェックボックスに従いデータ送信フラグ�
     else:
         flag_send_data = 0
         print("Quit sending data to ESP32.")
+
+def send_miniterminal_data():# チェックボックスに従いデータ送信フラグをオンオフ
+    global flag_send_miniterminal_data
+    if flag_send_miniterminal_data == 0 :
+        flag_send_miniterminal_data = 1
+        print("Set mini tarminal data to ESP32.")
+
+def set_miniterminal_data():# ミニターミナルのセットボタンが押下されたら送信データをセットする
+    global s_minitermnal_keep
+    print_string =""
+    for i in range(8):
+        value_tag_index = "s_index"+str(i)
+        value_tag_data = "s_data"+str(i)
+
+        if dpg.get_value(value_tag_index) != "":
+            if dpg.get_value(value_tag_data) != "":
+                if (int(dpg.get_value(value_tag_data)) >= -32768) and (int(dpg.get_value(value_tag_data)) <= 32767) and (int(dpg.get_value(value_tag_index)) >= 0) and (int(dpg.get_value(value_tag_index)) < MSG_SIZE):
+                    print_string = print_string+"["+str(dpg.get_value(value_tag_index))+"] "+str(dpg.get_value(value_tag_data))+", "
+                    s_minitermnal_keep[i][0] = int(dpg.get_value(value_tag_index))
+                    s_minitermnal_keep[i][1] = int(dpg.get_value(value_tag_data))
+                else:
+                    s_minitermnal_keep[i][0] = -1 #該当しないデータにはインデックスに-1を指定して送信データに反映されないようにしておく
+                    print_string = print_string+"["+str(dpg.get_value(value_tag_index))+"] out of range, "
+
+    print("Set mini tarminal data : ")
+    print(print_string[:-2]) #末尾のカンマ以外を表示
+
+
+def set_tarminal_send_on():# ボタン押下でset_flowフラグをオン
+    global flag_tarminal_mode_send
+    global s_minitermnal_keep
+    if flag_tarminal_mode_send == 0 :
+        flag_tarminal_mode_send = 2
+        print("Start to send miniterminal data.")
+    else:
+        flag_tarminal_mode_send = 0
+        print("Stop to send miniterminal data.")
+        for i in range(8):
+            s_minitermnal_keep[i][0] = -1 #該当しないデータにはインデックスに-1を指定して送信データに反映されないようにしておく
+            s_minitermnal_keep[i][1] = 0 #該当しないデータにはインデックスに-1を指定して送信データに反映されないようにしておく
+
+def set_flow():# ボタン押下でset_flowフラグをオン
+    global flag_set_flow
+    flag_set_flow = 1
+    print("Set flow to Meridian.")
+
+def set_step():# ボタン押下でset_stepフラグをオン
+    global flag_set_step
+    flag_set_step = 1
+    print("Set step to Meridian.")
 
 def set_send_virtual():# チェックボックスに従いデータ送信フラグをオンオフ
     global flag_send_virtual
@@ -498,7 +636,7 @@ def main():
     # dpg用関数 ==================================================
     def set_yaw_center():# IMUのヨー軸センターリセットフラグを10上げる（コマンドを10回送信する）
         global flag_update_yaw
-        flag_update_yaw = 20
+        flag_update_yaw = command_send_trial
 
     def reset_counter():# カウンターのリセット
         global loop_count
@@ -583,6 +721,40 @@ def main():
             dpg.add_checkbox(tag="Btn_R_LEFT",  callback=pad_btn_panel_on, user_data=32768, pos=[166,102])
             dpg.add_checkbox(tag="Btn_R_RIGHT",  callback=pad_btn_panel_on, user_data=8192, pos=[210,102])
 
+        # （画面中段右側）コマンド送信用ミニターミナル ==================================================
+        with dpg.window(label="Mini Terminal", width=248, height=175,pos=[600,165]):
+            #with dpg.group(label='LeftSide'): 
+            dpg.add_text("Index", pos=[15,25])
+            dpg.add_text("Data", pos=[60,25])
+            dpg.add_input_text(tag="s_index0", decimal=True, default_value="0", width =40, pos=[15,45]) #入力できるテキストボックスを設置
+            dpg.add_input_text(tag="s_data0", decimal=True, default_value=str(MSG_SIZE), width =60, pos=[60,45]) #入力できるテキストボックスを設置
+            dpg.add_input_text(tag="s_index1", decimal=True, default_value="", width =40, pos=[15,70]) #入力できるテキストボックスを設置
+            dpg.add_input_text(tag="s_data1", decimal=True, default_value="", width =60, pos=[60,70]) #入力できるテキストボックスを設置
+            dpg.add_input_text(tag="s_index2", decimal=True, default_value="", width =40, pos=[15,95]) #入力できるテキストボックスを設置
+            dpg.add_input_text(tag="s_data2", decimal=True, default_value="", width =60, pos=[60,95]) #入力できるテキストボックスを設置
+            dpg.add_input_text(tag="s_index3", decimal=True, default_value="", width =40, pos=[15,120]) #入力できるテキストボックスを設置
+            dpg.add_input_text(tag="s_data3", decimal=True, default_value="", width =60, pos=[60,120]) #入力できるテキストボックスを設置
+
+            dpg.add_text("Index", pos=[130,25])
+            dpg.add_text("Data", pos=[175,25])
+            dpg.add_input_text(tag="s_index4", decimal=True, default_value="", width =40, pos=[130,45]) #入力できるテキストボックスを設置
+            dpg.add_input_text(tag="s_data4", decimal=True, default_value="", width =60, pos=[175,45]) #入力できるテキストボックスを設置
+            dpg.add_input_text(tag="s_index5", decimal=True, default_value="", width =40, pos=[130,70]) #入力できるテキストボックスを設置
+            dpg.add_input_text(tag="s_data5", decimal=True, default_value="", width =60, pos=[175,70]) #入力できるテキストボックスを設置
+            dpg.add_input_text(tag="s_index6", decimal=True, default_value="", width =40, pos=[130,95]) #入力できるテキストボックスを設置
+            dpg.add_input_text(tag="s_data6", decimal=True, default_value="", width =60, pos=[175,95]) #入力できるテキストボックスを設置
+            dpg.add_input_text(tag="s_index7", decimal=True, default_value="", width =40, pos=[130,120]) #入力できるテキストボックスを設置
+            dpg.add_input_text(tag="s_data7", decimal=True, default_value="", width =60, pos=[175,120]) #入力できるテキストボックスを設置
+
+            dpg.add_button(label="Set",  callback=set_miniterminal_data, pos=[150,148]) #Sendと書いてあるボタンをwindowの右下に設置
+            dpg.add_text("Send", pos=[184,148])
+            dpg.add_checkbox(tag="TarminalMode",  callback=set_tarminal_send_on, pos=[215,148])
+
+            dpg.add_text("Mode", pos=[15,148])
+            dpg.add_button(label="Flow",  callback=set_flow, pos=[50,148]) #Sendと書いてあるボタンをwindowの右下に設置
+            dpg.add_button(label="Step",  callback=set_step, pos=[90,148]) #Sendと書いてあるボタンをwindowの右下に設置
+
+
         # （画面中段中央）コマンド送信/リモコン値表示用ウィンドウ ==================================================
         with dpg.window(label="Command", width=335, height=170,pos=[260,185]):
             dpg.add_checkbox(label="Power", tag="Power",  callback=set_servo_power, pos=[8,50])
@@ -629,7 +801,6 @@ def main():
 
             # サーボデータとIMUデータの表示更新
             for i in range(0, 15, 1):
-                # global button
                 idld = r_meridim[21+i*2]
                 idrd = r_meridim[51+i*2]
                 idsensor = r_meridim[i+2]/10000
