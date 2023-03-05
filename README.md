@@ -25,7 +25,7 @@ MeridianBoardの電源を入れ接続が確立すると, Meridian consoleの画�
 ターミナルでctrl + c を押して終了します.  
 
 # 画面の解説  
-![meridian_console](https://user-images.githubusercontent.com/8329123/190896443-e0e43576-9fd8-4b45-8bfb-13ca89b4d613.jpg)
+![console_img_20230305](https://user-images.githubusercontent.com/8329123/222967600-a5a41b8b-f766-4bab-b59d-ff160feb8fbd.JPG)
 
 #### Command
 コマンドの切り替えを行います.  
@@ -53,4 +53,8 @@ SetYawボタンでヨー軸の中央値をリセットします.
 #### Button Input  
 リモコンのボタン入力値をPC起点で出力します.  
 
-
+#### Mini Terminal (2023.03.5)
+Meridim配列に差し込みたいデータ値を8つまで同時送信することができます.
+MeridianのIndex（Meridim90であれば0~89）とdataをテキストボックスに入力後、Setボタンを押し、さらにSendにチェックを入れることでデータが送信されます。
+※Setを行うことでバッファにデータがセットされ、Sendのチェックを入れることでそのデータが送信されつづけます。
+※Indexの範囲外のデータは無効となり送信されません。また、チェックを外した時に送信バッファの各Indexに-1が代入されます。
