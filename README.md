@@ -25,8 +25,7 @@ MeridianBoardの電源を入れ接続が確立すると, Meridian consoleの画�
 ターミナルでctrl + c を押して終了します.  
 
 # 画面の解説  
-![console_img_20230305](https://user-images.githubusercontent.com/8329123/222967600-a5a41b8b-f766-4bab-b59d-ff160feb8fbd.JPG)
-
+![console_img_20230502](https://github.com/Ninagawa123/Meridian_console/blob/main/image/console_img_20230502.JPG)
 #### Command
 コマンドの切り替えを行います.  
 Power : サーボの電源をオンにします.  
