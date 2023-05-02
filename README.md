@@ -44,6 +44,7 @@ Control Pad Monitor : ESP32やTeensyに接続されたリモコンの値を表�
 #### Axis Monitor  
 受信したサーボの角度を表示します.  
 Powerオンの時, スライダーでサーボを動かすことができます.  
+Home : すべてのサーボポジションに対し一度0を代入します.
   
 #### Sensor Monitor  
 6軸センサーや9軸センサーの値を表示します.  
