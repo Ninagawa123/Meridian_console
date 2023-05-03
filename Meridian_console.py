@@ -69,12 +69,12 @@ import struct
 # from sensor_msgs.msg import JointState
 
 # 定数
-TITLE_VERSION="Meridian_Console_v23.0501" # DPGのウィンドウタイトル兼バージョン表示
+TITLE_VERSION="Meridian_Console_v23.0503" # DPGのウィンドウタイトル兼バージョン表示
 
 UDP_RESV_IP="192.168.1.xx" # このPCのIPアドレス
 UDP_RESV_PORT=22222       # 受信ポート
 
-UDP_SEND_IP="192.168.1.xx" # 送信先のESP32のIPアドレス
+UDP_SEND_IP="192.168.1.xx" # 送信先のESP32のIPアドレス 21
 UDP_SEND_PORT=22224       # 送信ポート
 
 MSG_SIZE = 90             # Meridim配列の長さ(デフォルトは90)
@@ -126,7 +126,7 @@ error_count_tsy_to_esp = 0 # TeensyからESP32へのSPI通信でのエラー数
 error_count_tsy_skip = 0   # Teensyが受信したデータがクロックカウントスキップしていたか
 error_count_esp_skip = 0   # ESPが受信したデータがクロックカウントスキップしていたか
 error_count_pc_skip = 0    # PCが受信したデータがクロックカウントスキップしていたか
-frame_sync_s = 0           # 送信するframe_sync_r(0-59999)
+frame_sync_s = 56000           # 送信するframe_sync_r(0-59999)
 frame_sync_r_expect = 0    # 毎フレームカウントし、受信カウントと比較(0-59999)
 frame_sync_r_resv = 0      # 今回受信したframe_sync_r
 frame_sync_r_last = 0      # 前回受信したframe_sync_r
@@ -413,9 +413,13 @@ def meridian_loop():
 
                     # シーケンス番号を格納. unsigned short として取り出せるようなsinged shortに変換
                     if frame_sync_s > 32767:
-                        s_meridim[1] = -(65536 - frame_sync_s)
+                        #s_meridim[1] = -(65536 - frame_sync_s)
+                        #s_meridim[1] = (32767-frame_sync_s)# & 0xffff
+                        s_meridim[1] = frame_sync_s-65536
+
                     else:
-                        s_meridim[1] = frame_sync_s
+                        #s_meridim[1] = frame_sync_s
+                        s_meridim[1] = frame_sync_s #& 0xffff
 
                     # リモコンデータをリセットし、PCからのリモコン入力値を格納
                     temp = np.array([0], dtype=np.int16)
