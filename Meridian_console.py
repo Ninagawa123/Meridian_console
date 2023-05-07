@@ -35,20 +35,21 @@
 # 
 #【Mini Terminal】
 # Meridim配列のデータをインプットし8つまで同時送信することができます.
-# MeridianのIndex（Meridim90であれば0~89）とDataを入力し, Setボタンを押し,
+# MeridianのIndex（Meridim90であれば0~89）とDataを入力し、Setボタンを押し、
 # Sendにチェックを入れることでデータが送信されます。
-# ※Setを行うことでバッファにデータがセットされ,Sendのチェックを入れることでそのデータが送信されつづけます.
-# 　Indexの範囲外のデータは無効となり送信されません. また,チェックを外した時に送信バッファの各Indexに-1が代入されます.
+# ※Setを行うことでバッファにデータがセットされ、Sendのチェックを入れることでそのデータが送信されつづけます。
+# 　Indexの範囲外のデータは無効となり送信されません。また、チェックを外した時に送信バッファの各Indexに-1が代入されます。
 # 
 #【Button Input】
 # コンソールからリモコンボタン押下情報を送信します
 # 
 #【Message】
-# IPと各経路のエラーカウント,エラー率,フレーム数,動作周波数を表示します
+# IPと各経路のエラーカウント、エラー率、フレーム数、動作周波数を表示します
 # ResetCounter: カウンタの値をリセットするボタンです
 # TsySKIP, PcSKIP: 連番データの取りこぼし数を表示します
-# ESP32にPS4リモコン接続した時に受信スキップ回数が5%ほど検出されるのは、現在の仕様では正常な動作です
-# Servo_trouble: 通信返信の取りこぼしがあったサーボのIDを表示します
+# PS4リモコン接続時に受信スキップ回数が5%ほど検出されるのは、現在の仕様では正常な動作です
+# Button Inputウィンドウ
+# コンソールからリモコンボタン押下情報を送信します
 
 from ast import Pass
 import numpy as np
@@ -126,7 +127,7 @@ error_count_tsy_skip = 0   # Teensyが受信したデータがクロックカウ
 error_count_esp_skip = 0   # ESPが受信したデータがクロックカウントスキップしていたか
 error_count_pc_skip = 0    # PCが受信したデータがクロックカウントスキップしていたか
 error_count_servo_skip = 0    # サーボ接続マイコン(Teensy/ESP32)がサーボ値の受信に失敗した回数
-error_servo_id = "None"
+error_servo_id = "None" # 受信エラーのあったサーボのIDを格納
 frame_sync_s = 56000           # 送信するframe_sync_r(0-59999)
 frame_sync_r_expect = 0    # 毎フレームカウントし、受信カウントと比較(0-59999)
 frame_sync_r_resv = 0      # 今回受信したframe_sync_r
@@ -285,13 +286,21 @@ def meridian_loop():
                     if (r_meridim[MSG_ERRS] >> 9 & 1)  == 1:# エラーフラグ9ビット目（TeensyのESP経由のPCから受信のフレーム連番スキップフラグ）を調べる
                         error_count_tsy_skip += 1
                     temp_int16[0] = r_meridim[MSG_ERRS] & 0b0000000011111111 # 
+                    error_servo_id_past = error_servo_id
                     if temp_int16[0] > 0:# サーボ値の受信に失敗したサーボID(エラーフラグ下位8ビット）を調べる
                         error_count_servo_skip += 1    # 
-                        print(r_meridim[MSG_ERRS] & 0b0000000011111111)
                         if r_meridim[MSG_ERRS] & 0b0000000011111111>99:
                             error_servo_id="id_R"+str(int(r_meridim[MSG_ERRS] & 0b0000000011111111)-100)
                         else:
                             error_servo_id="id_L"+str(int(r_meridim[MSG_ERRS] & 0b0000000011111111))
+                    else:
+                        error_servo_id="None"
+
+                    if (error_servo_id_past != error_servo_id):
+                        if error_servo_id=="None":
+                            print("Servo error gone...")
+                        else:print("Found servo error: "+error_servo_id)
+
                     temp_int16[0] = r_meridim[MSG_ERRS] & 0b0111111111111111 # エラーフラグ15ビット目(PCのUDP受信エラーフラグ)を下げる
                 else:
                     temp_int16[0] = r_meridim[MSG_ERRS] | 0b1000000000000000 # エラーフラグ15ビット目(PCのUDP受信エラーフラグ)を上げる                    
@@ -495,8 +504,8 @@ def meridian_loop():
                     #今回受信のシーケンス番号を次回比較用にキープ
                     frame_sync_r_last = frame_sync_r_resv
                 
-                else:
-                    print("pass************")      
+                #else:
+                #    print("pass************")      
 
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
 # 関 数 各 種 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
@@ -797,7 +806,7 @@ def main():
 
 
         # （画面中段中央）コマンド送信/リモコン値表示用ウィンドウ ==================================================
-        with dpg.window(label="Command", width=335, height=170,pos=[260,185]):
+        with dpg.window(label="Command", width=335, height=190,pos=[260,185]):
             dpg.add_checkbox(label="Power", tag="Power",  callback=set_servo_power, pos=[8,50])
 
             dpg.add_checkbox(tag="Receive",  callback=set_resv_data, pos=[160,27])
