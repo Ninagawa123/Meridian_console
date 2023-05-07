@@ -35,21 +35,20 @@
 # 
 #【Mini Terminal】
 # Meridim配列のデータをインプットし8つまで同時送信することができます.
-# MeridianのIndex（Meridim90であれば0~89）とDataを入力し、Setボタンを押し、
+# MeridianのIndex（Meridim90であれば0~89）とDataを入力し, Setボタンを押し,
 # Sendにチェックを入れることでデータが送信されます。
-# ※Setを行うことでバッファにデータがセットされ、Sendのチェックを入れることでそのデータが送信されつづけます。
-# 　Indexの範囲外のデータは無効となり送信されません。また、チェックを外した時に送信バッファの各Indexに-1が代入されます。
+# ※Setを行うことでバッファにデータがセットされ,Sendのチェックを入れることでそのデータが送信されつづけます.
+# 　Indexの範囲外のデータは無効となり送信されません. また,チェックを外した時に送信バッファの各Indexに-1が代入されます.
 # 
 #【Button Input】
 # コンソールからリモコンボタン押下情報を送信します
 # 
 #【Message】
-# IPと各経路のエラーカウント、エラー率、フレーム数、動作周波数を表示します
+# IPと各経路のエラーカウント,エラー率,フレーム数,動作周波数を表示します
 # ResetCounter: カウンタの値をリセットするボタンです
 # TsySKIP, PcSKIP: 連番データの取りこぼし数を表示します
-# PS4リモコン接続時に受信スキップ回数が5%ほど検出されるのは、現在の仕様では正常な動作です
-# Button Inputウィンドウ
-# コンソールからリモコンボタン押下情報を送信します
+# ESP32にPS4リモコン接続した時に受信スキップ回数が5%ほど検出されるのは、現在の仕様では正常な動作です
+# Servo_trouble: 通信返信の取りこぼしがあったサーボのIDを表示します
 
 from ast import Pass
 import numpy as np
@@ -69,7 +68,7 @@ import struct
 # from sensor_msgs.msg import JointState
 
 # 定数
-TITLE_VERSION="Meridian_Console_v23.0503" # DPGのウィンドウタイトル兼バージョン表示
+TITLE_VERSION="Meridian_Console_v23.0506" # DPGのウィンドウタイトル兼バージョン表示
 
 UDP_RESV_IP="192.168.1.xx" # このPCのIPアドレス
 UDP_RESV_PORT=22222       # 受信ポート
@@ -126,6 +125,8 @@ error_count_tsy_to_esp = 0 # TeensyからESP32へのSPI通信でのエラー数
 error_count_tsy_skip = 0   # Teensyが受信したデータがクロックカウントスキップしていたか
 error_count_esp_skip = 0   # ESPが受信したデータがクロックカウントスキップしていたか
 error_count_pc_skip = 0    # PCが受信したデータがクロックカウントスキップしていたか
+error_count_servo_skip = 0    # サーボ接続マイコン(Teensy/ESP32)がサーボ値の受信に失敗した回数
+error_servo_id = "None"
 frame_sync_s = 56000           # 送信するframe_sync_r(0-59999)
 frame_sync_r_expect = 0    # 毎フレームカウントし、受信カウントと比較(0-59999)
 frame_sync_r_resv = 0      # 今回受信したframe_sync_r
@@ -214,6 +215,8 @@ def meridian_loop():
     global error_count_esp_skip
     global error_count_tsy_skip
     global error_count_pc_skip
+    global error_count_servo_skip
+    global error_servo_id
     global frame_sync_s
     global frame_sync_r_expect
     global frame_sync_r_resv
@@ -280,11 +283,21 @@ def meridian_loop():
                     if (r_meridim[MSG_ERRS] >> 10 & 1) == 1:# エラーフラグ10ビット目（ESPのPCからのUDP受信のフレーム連番スキップフラグ）を調べる
                         error_count_esp_skip += 1
                     if (r_meridim[MSG_ERRS] >> 9 & 1)  == 1:# エラーフラグ9ビット目（TeensyのESP経由のPCから受信のフレーム連番スキップフラグ）を調べる
-                        error_count_tsy_skip += 1 
+                        error_count_tsy_skip += 1
+                    temp_int16[0] = r_meridim[MSG_ERRS] & 0b0000000011111111 # 
+                    if temp_int16[0] > 0:# サーボ値の受信に失敗したサーボID(エラーフラグ下位8ビット）を調べる
+                        error_count_servo_skip += 1    # 
+                        print(r_meridim[MSG_ERRS] & 0b0000000011111111)
+                        if r_meridim[MSG_ERRS] & 0b0000000011111111>99:
+                            error_servo_id="id_R"+str(int(r_meridim[MSG_ERRS] & 0b0000000011111111)-100)
+                        else:
+                            error_servo_id="id_L"+str(int(r_meridim[MSG_ERRS] & 0b0000000011111111))
                     temp_int16[0] = r_meridim[MSG_ERRS] & 0b0111111111111111 # エラーフラグ15ビット目(PCのUDP受信エラーフラグ)を下げる
                 else:
                     temp_int16[0] = r_meridim[MSG_ERRS] | 0b1000000000000000 # エラーフラグ15ビット目(PCのUDP受信エラーフラグ)を上げる                    
                     error_count_esp_to_pc += 1 # PCのUDP受信エラーをカウントアップ
+
+                #print(r_meridim[MSG_ERRS] & 0b0000000011111111)
 
                 # フレームスキップチェック用のカウントの受信と処理
                 frame_sync_r_resv = r_meridim_ushort[1] # 受信カウントを代入
@@ -468,15 +481,16 @@ def meridian_loop():
                     now = time.time()-start+0.0001
 
                     message2="ERROR COUNT ESP-PC:"+str("{:}".format(error_count_esp_to_pc))+\
-                        " PC-ESP:"+str("{:}".format(error_count_pc_to_esp))+" ESP-TSY:"+str("{:}".format(error_count_esp_to_tsy)) + " TSY_Delay:"+str("{:}".format(error_count_tsy_delay))
+                        " PC-ESP:"+str("{:}".format(error_count_pc_to_esp))+" ESP-TSY:"+str("{:}".format(error_count_esp_to_tsy)) + " TSY_Delay:"+str("{:}".format(error_count_tsy_delay))+\
+                        "    Servo_trouble:"+error_servo_id
 
                     message3="ERROR RATE ESP-PC:"+str("{:.2%}".format(error_count_esp_to_pc/loop_count))+\
                         " PC-ESP:"+str("{:.2%}".format(error_count_pc_to_esp/loop_count))+" ESP-TSY:"+str("{:.2%}".format(error_count_esp_to_tsy/loop_count))+\
                         " TsySKIP:"+str("{:.2%}".format(error_count_tsy_skip/loop_count))+" ESPSKIP:"+str("{:.2%}".format(error_count_esp_skip/loop_count))
 
-                    message4="SKIP COUNT TsySKIP:"+\
-                        str("{:}".format(error_count_tsy_skip))+" ESPSKIP:"+str("{:}".format(error_count_esp_skip))+" PcSKIP:"+str("{:}".format(error_count_pc_skip))+\
-                        " PCf:"+str(loop_count)+" BOARDf:"+str(frame_sync_r_resv)+" "+str(int(loop_count/now))+"Hz"
+                    message4="SKIP COUNT Tsy:"+\
+                        str("{:}".format(error_count_tsy_skip))+" ESP:"+str("{:}".format(error_count_esp_skip))+" PC:"+str("{:}".format(error_count_pc_skip))+\
+                        " Servo:"+str("{:}".format(error_count_servo_skip))+" PCframe:"+str(loop_count)+" BOARDframe:"+str(frame_sync_r_resv)+" "+str(int(loop_count/now))+"Hz"
                     
                     #今回受信のシーケンス番号を次回比較用にキープ
                     frame_sync_r_last = frame_sync_r_resv
@@ -669,6 +683,8 @@ def main():
         global error_count_tsy_skip
         global error_count_esp_skip
         global error_count_pc_skip
+        global error_count_servo_skip
+        global error_servo_id
         global start
 
         loop_count = 1
@@ -679,6 +695,8 @@ def main():
         error_count_tsy_skip = 0
         error_count_esp_skip = 0
         error_count_pc_skip = 0
+        error_count_servo_skip = 0
+        error_servo_id = "None"
         start = time.time()
     
     while(True):
