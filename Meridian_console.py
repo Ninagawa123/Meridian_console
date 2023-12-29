@@ -109,16 +109,15 @@ class MeridianConsole:
         self.loop_count = 0
 
         # Meridim配列関連
-        self.r_meridim = np.zeros(MSG_SIZE, dtype=np.int16)           # Meridim配列
-        self.s_meridim = np.zeros(MSG_SIZE, dtype=np.int16)           # Meridim配列
-        self.r_meridim_char = np.zeros(MSG_SIZE*2, dtype=np.uint8)    # Meridim配列
-        self.r_meridim_ushort = np.zeros(MSG_SIZE*2, dtype=np.uint8)  # Meridim配列
-        self.d_meridim = np.zeros(MSG_SIZE, dtype=np.int16)           # 表示用
-        # ROSからサブスクライブしたサーボ位置情報の格納用Meridim配列
-        self.s_meridim_js_sub = [0]*MSG_SIZE
-        # Meridim配列のPC側で作成したサーボ位置命令送信用
-        self.s_meridim_motion_f = np.zeros(MSG_SIZE, dtype=float)
-        self.s_meridim_motion_keep_f = np.zeros(MSG_SIZE, dtype=float)
+        self.r_meridim = np.zeros(MSG_SIZE, dtype=np.int16)            # Meridim配列
+        self.s_meridim = np.zeros(MSG_SIZE, dtype=np.int16)            # Meridim配列
+        self.r_meridim_char = np.zeros(MSG_SIZE*2, dtype=np.uint8)     # Meridim配列
+        self.r_meridim_ushort = np.zeros(MSG_SIZE*2, dtype=np.uint8)   # Meridim配列
+        self.d_meridim = np.zeros(MSG_SIZE, dtype=np.int16)            # 表示用
+        self.s_meridim_js_sub_f = np.zeros(MSG_SIZE, dtype=float)      # ROSサブスクライブ用
+        self.pad_button_panel_short = np.array([0], dtype=np.uint16)   # コンパネからのリモコン入力用
+        self.s_meridim_motion_f = np.zeros(MSG_SIZE, dtype=float)      # PC側で作成したサーボ位置送信用
+        self.s_meridim_motion_keep_f = np.zeros(MSG_SIZE, dtype=float) # PC側で作成したサーボ位置キープ用
         self.s_minitermnal_keep = np.zeros((8, 2))  # コンパネからのリモコン入力用
         for i in range(8):
             self.s_minitermnal_keep[i][0] = -1 #該当しないデータにはインデックスに-1を指定して送信データに反映されないようにしておく
@@ -135,46 +134,37 @@ class MeridianConsole:
         self.error_count_pc_skip = 0     # PCが受信したデータがクロックカウントスキップしていたか
         self.error_count_servo_skip = 0  # マイコン(Teensy/ESP32)がサーボ値の受信に失敗した回数
         self.error_servo_id = "None"     # 受信エラーのあったサーボのIDを格納
-        self.frame_sync_s = 56000        # 送信するframe_sync_r(0-59999)
+        self.frame_sync_s = 0            # 送信するframe_sync_r(0-59999)
         self.frame_sync_r_expect = 0     # 毎フレームカウントし、受信カウントと比較(0-59999)
         self.frame_sync_r_resv = 0       # 今回受信したframe_sync_r
         self.frame_sync_r_last = 0       # 前回受信したframe_sync_r
-        self.error_servo_id_past = 0
+        self.error_servo_id_past = 0     # 前回のサーボエラーIDキープ用
 
         # 制御コマンド用フラグ等
-        self.main_command = MSG_SIZE         # meridim[0]に格納するコマンド番号
-        self.flag_update_yaw = 0             # IMUのヨー軸センターリセットフラグ(python内部用)
-        self.flag_servo_power = 0            # 全サーボのパワーオンオフフラグ
-        self.flag_udp_resv = 0               # UDP受信の完了フラグ
-        
-        # ESP32への状態データの送信のオンオフフラグ（サーボパワーオフでもデータ送信可能にすべく）
-        self.flag_enable_send_made_data = 0
+        self.main_command = MSG_SIZE           # meridim[0]に格納するコマンド番号
+        self.flag_update_yaw = 0               # IMUのヨー軸センターリセットフラグ(python内部用)
+        self.flag_servo_power = 0              # 全サーボのパワーオンオフフラグ
+        self.flag_udp_resv = True              # UDP受信の完了フラグ
+        self.flag_enable_send_made_data = False # ESP32への状態データの送信のオンオフフラグ
+        self.flag_resv_data = 0                # ESP32からの状態データの受信のオンオフフラグ
+        self.flag_send_data = 0                # ESP32への状態データの送信のオンオフフラグ（サーボパワーオフでもデータ送信可能にすべく）
+        self.flag_send_virtual = 0             # ハードウェアを接続しないで動作させる場合のバーチャルハードのオンオフフラグ
+        self.flag_send_motion = 0              # 計算モーション送信のオンオフフラグ
+        self.flag_set_miniterminal_data = 0    # ミニターミナルの値をセットするボタンのためのフラグ
+        self.flag_send_miniterminal_data = 0   # ミニターミナルの値を送信するボタンのためのフラグ
+        self.flag_tarminal_mode_send = 0       # miniterminalを有効にし、コマンドを優先する。
+        self.flag_demo_action = 0              # デモ/テスト用の計算モーション送信のオンオフフラグ
+        self.flag_python_action = 0            # ユーザー自作python有効のオンオフフラグ
+        self.flag_ros1_pub = 0                 # ROS1のjoint_statesのパブリッシュ
+        self.flag_ros1_sub = 0                 # ROS1のjoint_statesのサブスクライブ
+        self.flag_ros1 = 0                     # ROS1の起動init（初回のみ）
+        self.flag_set_flow = True              # Meridianの循環をTrue:通常フロー、False:ステップ
+        #self.flag_flow_switch = False         # フロー、ステップのモード切り替え時に反応するフラグ
+        self.flag_servo_home = 0               # 全サーボ位置をゼロリセット
+        self.flag_send_data_step_frame = True  # RETURN押下で１ステップ分のデータ送信
+        self.flag_display_mode = 0             # Axis monitorに表示するデータが受信データ(actual)か送信データ(target)か
+        self.flag_ros1_output_mode = 0         # ROS1にパブリッシュするデータが受信データ(actual)か送信データ(target)か
 
-        # ESP32からの状態データの受信のオンオフフラグ（モーション送信時のシミュレーション空間用として）
-        self.flag_resv_data = 0
-        self.flag_send_data = 0              # ESP32への状態データの送信のオンオフフラグ（サーボパワーオフでもデータ送信可能にすべく）
-        self.flag_send_virtual = 0           # ハードウェアを接続しないで動作させる場合のバーチャルハードのオンオフフラグ
-        self.flag_send_motion = 0            # 計算モーション送信のオンオフフラグ
-        self.flag_send_miniterminal_data = 0
-        self.flag_set_miniterminal_data = 0  # ミニターミナルの値をセットするボタンのためのフラグ
-        self.flag_tarminal_mode_send = 0     # miniterminalを有効にし、コマンドを優先する。
-        self.flag_demo_action = 0            # デモ/テスト用の計算モーション送信のオンオフフラグ
-        self.flag_python_action = 0          # ユーザー自作python有効のオンオフフラグ
-        self.flag_ros1_pub = 0               # ROS1のjoint_statesのパブリッシュ
-        self.flag_ros1_sub = 0               # ROS1のjoint_statesのサブスクライブ
-        self.flag_ros1 = 0                   # ROS1の起動init（初回のみ）
-        self.flag_set_flow = True            # Meridianの循環をTrue:通常フロー、False:ステップ
-        self.flag_flow_switch = False        # フロー、ステップのモード切り替え時に反応するフラグ
-        self.flag_servo_home = 0             # 全サーボ位置をゼロリセット
-        self.flag_send_data_step_frame = 0   # RETURN押下で１ステップ分のデータ送信
-        
-        self.flag_display_mode = 0           # Axis monitorに表示するデータが受信データ(actual)か送信データ(target)か
-        # ROS1にパブリッシュするデータが受信データ(actual)か送信データ(target)か
-        self.flag_ros1_output_mode = 0
-
-
-        self.pad_button_panel_short = np.array(
-            [0], dtype=np.uint16)  # コンパネからのリモコン入力用
 
         # メッセージ表示用
         self.message3 = ""
@@ -350,10 +340,11 @@ def meridian_loop():
                     # フレームスキップチェック用のカウントの受信と処理
                     mrd.frame_sync_r_resv = mrd.r_meridim_ushort[1]  # 受信カウントを代入
 
-#                if mrd.flag_set_flow == False:
-#                    while(mrd.flag_send_data_step_frame == False):
-#                        time.sleep(0.005)  # CPUの負荷を下げる
-#                    mrd.flag_send_data_step_frame == False
+                if mrd.flag_set_flow == False: # ステップモードの場合はここで止めてループする
+                    while(mrd.flag_send_data_step_frame == False):
+                        time.sleep(0.005)  # CPUの負荷を下げる
+                    time.sleep(0.001) 
+                    mrd.flag_send_data_step_frame == False
 
 # ------------------------------------------------------------------------
 # [2-1] : チェック済み受信UDPデータに基づく処理
@@ -382,24 +373,25 @@ def meridian_loop():
                     # PC側サーボ位置発信用に最終サーボ情報をキープ
                     if mrd.flag_servo_power == 2:  # サーボオンボタン押下初回のみ最終受け取りサーボ情報をキープ
                         for i in range(21, 81, 2):
-                            mrd.s_meridim_motion_f[i] = mrd.r_meridim[i]*0.01
+                            #mrd.s_meridim_motion_f[i] = mrd.r_meridim[i]*0.01
                             mrd.s_meridim_motion_keep_f[i] = mrd.r_meridim[i]*0.01
                         mrd.flag_servo_power = 1
 
-                    if mrd.flag_servo_power == -1:  # サーボオンボタン押下初回のみ最終受け取りサーボ情報をキープ
+                    if mrd.flag_servo_power == -1:  # サーボオフボタン押下初回のみ最終送信サーボ情報をキープ
                         for i in range(21, 81, 2):
                             mrd.s_meridim_motion_keep_f[i] = mrd.s_meridim[i]*0.01
                         mrd.flag_servo_power = 0
 
-# ------------------------------------------------------------------------
-# [3-1] : 送信用UDPデータの作成
-# ------------------------------------------------------------------------
-                    # 送信用のモーションを作成（①受信値そのまま ②ROSサブスク反映 ③計算モーション）
+#------------------------------------------------------------------------
+# [ 3-1 ] : 送信用UDPデータの作成 
+#           送信するサーボ位置を場合別に s_meridim_motion に格納する処理
+#           ① 受信値をそのまま返信, ② ROSのサブスク, ③ デモダンス計算値 ④ ユーザー計算値（python）
+#------------------------------------------------------------------------
                     if _checksum[0] == mrd.r_meridim[MSG_SIZE-1]:  # 受信成功時はデータ更新
                         mrd.s_meridim = []  # データのクリア
                         mrd.s_meridim = list(mrd.r_meridim)
 
-                    # ①受信値そのままの場合：送信データのベースを受信データのコピーで作成
+                    # ① 受信値そのままの場合：送信データのベースを受信データのコピーで作成
                     if mrd.flag_servo_power:  # サーボパワーオン時は、電源入力時に保持した値を固定で流す（ハウリング的なサーボ位置ズレの増幅を防止）
                         for i in range(21, 81, 2):
                             mrd.s_meridim[i] = int(mrd.s_meridim_motion_keep_f[i]*100)
@@ -408,13 +400,13 @@ def meridian_loop():
                             for i in range(21, 81, 2):  # 受信サーボ値を書き込みモーションのベースとして一旦キープ
                                 mrd.s_meridim_motion_f[i] = mrd.r_meridim[i]*0.01
 
-                    # ②サーボ位置にROSのサブスクライブを反映させる場合にはここでデータを作成★★
+                    # ② サーボ位置にROSのサブスクライブを反映させる場合にはここでデータを作成★★
                     if mrd.flag_ros1_sub:
                         for i in range(15):
-                            mrd.s_meridim_motion_f[21+i * 2] = mrd.s_meridim_js_sub[21+i*2]
-                            mrd.s_meridim_motion_f[51+i * 2] = mrd.s_meridim_js_sub[51+i*2]
+                            mrd.s_meridim_motion_f[21+i * 2] = mrd.s_meridim_js_sub_f[21+i*2]
+                            mrd.s_meridim_motion_f[51+i * 2] = mrd.s_meridim_js_sub_f[51+i*2]
 
-                    # ③サーボ位置をここで計算制御する場合は以下でデータを作成(まずはデモモーションのみで運用テスト)
+                    # ③ サーボ位置をここで計算制御する場合は以下でデータを作成(まずはデモモーションのみで運用テスト)
                     if mrd.flag_demo_action:
                         # xをフレームごとにカウントアップ
                         mrd.x += math.pi/STEP
@@ -443,35 +435,35 @@ def meridian_loop():
                         mrd.s_meridim_motion_f[67] = int(np.sin(mrd.x*2)*40)         # 右膝ピッチ
                         mrd.s_meridim_motion_f[69] = -int(np.sin(mrd.x*2)*20) - 2  # 右足首ピッチ
                         mrd.s_meridim_motion_f[71] = -int(np.sin(mrd.x)*4)           # 右足首ロール
-                        for i in range(15):
-                            mrd.s_meridim_motion_keep_f[21+i * 2] = mrd.s_meridim_motion_f[21+i*2]
-                            mrd.s_meridim_motion_keep_f[51+i * 2] = mrd.s_meridim_motion_f[51+i*2]
+                        if mrd.flag_enable_send_made_data:
+                            for i in range(15):
+                                mrd.s_meridim_motion_keep_f[21+i * 2] = mrd.s_meridim_motion_f[21+i*2]
+                                mrd.s_meridim_motion_keep_f[51+i * 2] = mrd.s_meridim_motion_f[51+i*2]
 
                     # ④ ユーザーがサーボ位置処理を反映させる場合 → ここで自由にコードを作成
                     if mrd.flag_python_action: # コード書式は自由だが, 仮にすべての関節角度に0を代入する場合の例
-                        pass
-#                        mrd.s_meridim_motion_f[21] = mrd.s_meridim_motion_f[21] # 頭ヨー
-#                        mrd.s_meridim_motion_f[23] = mrd.s_meridim_motion_f[23] # 左肩ピッチ
-#                        mrd.s_meridim_motion_f[25] = mrd.s_meridim_motion_f[25] # 左肩ロール
-#                        mrd.s_meridim_motion_f[27] = mrd.s_meridim_motion_f[27] # 左肘ヨー
-#                        mrd.s_meridim_motion_f[29] = mrd.s_meridim_motion_f[29] # 左肘ピッチ
-#                        mrd.s_meridim_motion_f[31] = mrd.s_meridim_motion_f[31] # 左股ヨー
-#                        mrd.s_meridim_motion_f[33] = mrd.s_meridim_motion_f[33] # 左股ロール
-#                        mrd.s_meridim_motion_f[35] = mrd.s_meridim_motion_f[35] # 左股ピッチ
-#                        mrd.s_meridim_motion_f[37] = mrd.s_meridim_motion_f[37] # 左膝ピッチ
-#                        mrd.s_meridim_motion_f[39] = mrd.s_meridim_motion_f[39] # 左足首ピッチ
-#                        mrd.s_meridim_motion_f[41] = mrd.s_meridim_motion_f[41] # 左足首ロール
-#                        mrd.s_meridim_motion_f[51] = mrd.s_meridim_motion_f[51] # 腰ヨー
-#                        mrd.s_meridim_motion_f[53] = mrd.s_meridim_motion_f[53] # 右肩ピッチ
-#                        mrd.s_meridim_motion_f[55] = mrd.s_meridim_motion_f[55] # 右肩ロール
-#                        mrd.s_meridim_motion_f[57] = mrd.s_meridim_motion_f[57] # 右肘ヨー
-#                        mrd.s_meridim_motion_f[59] = mrd.s_meridim_motion_f[59] # 右肘ピッチ
-#                        mrd.s_meridim_motion_f[61] = mrd.s_meridim_motion_f[61] # 右股ヨー
-#                        mrd.s_meridim_motion_f[63] = mrd.s_meridim_motion_f[63] # 右股ロール
-#                        mrd.s_meridim_motion_f[65] = mrd.s_meridim_motion_f[65] # 右股ピッチ
-#                        mrd.s_meridim_motion_f[67] = mrd.s_meridim_motion_f[67] # 右膝ピッチ
-#                        mrd.s_meridim_motion_f[69] = mrd.s_meridim_motion_f[69] # 右足首ピッチ
-#                        mrd.s_meridim_motion_f[71] = mrd.s_meridim_motion_f[71] # 右足首ロール
+                        mrd.s_meridim_motion_f[21] = mrd.s_meridim_motion_f[21] # 頭ヨー
+                        mrd.s_meridim_motion_f[23] = mrd.s_meridim_motion_f[23] # 左肩ピッチ
+                        mrd.s_meridim_motion_f[25] = mrd.s_meridim_motion_f[25] # 左肩ロール
+                        mrd.s_meridim_motion_f[27] = mrd.s_meridim_motion_f[27] # 左肘ヨー
+                        mrd.s_meridim_motion_f[29] = mrd.s_meridim_motion_f[29] # 左肘ピッチ
+                        mrd.s_meridim_motion_f[31] = mrd.s_meridim_motion_f[31] # 左股ヨー
+                        mrd.s_meridim_motion_f[33] = mrd.s_meridim_motion_f[33] # 左股ロール
+                        mrd.s_meridim_motion_f[35] = mrd.s_meridim_motion_f[35] # 左股ピッチ
+                        mrd.s_meridim_motion_f[37] = mrd.s_meridim_motion_f[37] # 左膝ピッチ
+                        mrd.s_meridim_motion_f[39] = mrd.s_meridim_motion_f[39] # 左足首ピッチ
+                        mrd.s_meridim_motion_f[41] = mrd.s_meridim_motion_f[41] # 左足首ロール
+                        mrd.s_meridim_motion_f[51] = mrd.s_meridim_motion_f[51] # 腰ヨー
+                        mrd.s_meridim_motion_f[53] = mrd.s_meridim_motion_f[53] # 右肩ピッチ
+                        mrd.s_meridim_motion_f[55] = mrd.s_meridim_motion_f[55] # 右肩ロール
+                        mrd.s_meridim_motion_f[57] = mrd.s_meridim_motion_f[57] # 右肘ヨー
+                        mrd.s_meridim_motion_f[59] = mrd.s_meridim_motion_f[59] # 右肘ピッチ
+                        mrd.s_meridim_motion_f[61] = mrd.s_meridim_motion_f[61] # 右股ヨー
+                        mrd.s_meridim_motion_f[63] = mrd.s_meridim_motion_f[63] # 右股ロール
+                        mrd.s_meridim_motion_f[65] = mrd.s_meridim_motion_f[65] # 右股ピッチ
+                        mrd.s_meridim_motion_f[67] = mrd.s_meridim_motion_f[67] # 右膝ピッチ
+                        mrd.s_meridim_motion_f[69] = mrd.s_meridim_motion_f[69] # 右足首ピッチ
+                        mrd.s_meridim_motion_f[71] = mrd.s_meridim_motion_f[71] # 右足首ロール
                         
                         
                     # ④サーボ位置リセットボタン(Home)が押下されていたらいったん全サーボ位置を0にする
@@ -490,8 +482,7 @@ def meridian_loop():
                         mrd.flag_update_yaw -= 1
                         mrd.s_meridim[0] = CMD_SET_YAW_CENTER
                         if (mrd.flag_update_yaw == 0):
-                            print(
-                                "Send COMMAND 'Set Yaw Center.':["+str(CMD_SET_YAW_CENTER)+"]")
+                            print("Send COMMAND 'Set Yaw Center.':["+str(CMD_SET_YAW_CENTER)+"]")
                         
                     # PC側発行のサーボ位置を格納
                     if mrd.flag_enable_send_made_data:
@@ -506,26 +497,16 @@ def meridian_loop():
                                 mrd.flag_servo_home = 0
                             if mrd.flag_demo_action | mrd.flag_python_action | mrd.flag_ros1_sub:
                                 mrd.s_meridim[i] = int(mrd.s_meridim_motion_f[i]*100)
-                            elif mrd.flag_servo_power:
-                                mrd.s_meridim[i] = int(mrd.s_meridim_motion_f[i]*100)
+                            #elif mrd.flag_servo_power:
+                            #    mrd.s_meridim[i] = int(mrd.s_meridim_motion_f[i]*100)
                             else:  # Consoleでモーションを指定しない場合はハンチング防止としてサーボオフ時のデータを送信
                                 mrd.s_meridim[i] = int(mrd.s_meridim_motion_keep_f[i]*100)
-                                
-#                    print("flag_set_flow: "+str(mrd.flag_set_flow))
 
-#                    if mrd.flag_set_flow == True:  # フローモード(ボード側が周期制御を持つ)への切り替え
-#                        if mrd.flag_flow_switch == True:
-#                            mrd.s_meridim[0] = MCMD_BOARD_TRANSMIT_ACTIVE
-#                            mrd.flag_flow_switch = False
-
-#                        dpg.set_value("transaction_mode", "Flow")
-
-#                    if mrd.flag_set_flow == False:  # ステップモード(PC側が周期制御を持つ)への切り替え
-#                        if mrd.flag_flow_switch == True:
-#                            mrd.s_meridim[0] = MCMD_BOARD_TRANSMIT_PASSIVE
-#                            mrd.flag_flow_switch = False
-#                        #mrd.flag_set_flow = False
-#                        dpg.set_value("transaction_mode", "Step")
+                    # Masterコマンドの格納
+                    if mrd.flag_set_flow == True:  # フローモード(ボード側が周期制御を持つ)への切り替え
+                        mrd.s_meridim[0] = MCMD_BOARD_TRANSMIT_ACTIVE
+                    if mrd.flag_set_flow == False:  # ステップモード(PC側が周期制御を持つ)への切り替え
+                        mrd.s_meridim[0] = MCMD_BOARD_TRANSMIT_PASSIVE
 
                     else:
                         mrd.s_meridim[0] = MSG_SIZE  # デフォルト値を格納
@@ -649,9 +630,8 @@ def pad_btn_panel_on(sender, app_data, user_data):
         print(f'Btn:{mrd.pad_button_panel_short[0]}')
 
 
-def set_servo_power():  # チェックボックスに従いサーボパワーオンフラグをオンオフ
-    mrd.flag_servo_power
-    if mrd.flag_servo_power == 0:
+def set_servo_power(sender, app_data, user_data):  # チェックボックスに従いサーボパワーオンフラグをオンオフ
+    if app_data:
         mrd.flag_servo_power = 2
         print("Servo Power ON")
     else:
@@ -667,15 +647,26 @@ def set_servo_power():  # チェックボックスに従いサーボパワーオ
 #        mrd.flag_demo_action = 0
 #        print("Quit DEMO motion data streaming.")
 
-def set_demo_action():# チェックボックスに従いアクション送信フラグをオンオフ
-    mrd.flag_demo_action=flip_number(mrd.flag_demo_action,"Start DEMO motion data streaming.","Quit DEMO motion data streaming.")
+def set_demo_action(sender, app_data, user_data):  # チェックボックスに従いアクション送信フラグをオンオフ
+#    mrd.flag_demo_action=flip_number(mrd.flag_demo_action,"Start DEMO motion data streaming.","Quit DEMO motion data streaming.")
+    mrd.flag_demo_action = flip_number(app_data, "Start DEMO motion data streaming.", "Quit DEMO motion data streaming.")
 
-def set_python_action():# チェックボックスに従いアクション送信フラグをオンオフ
-    mrd.flag_python_action=flip_number(mrd.flag_python_action,"Start python motion data streaming.","Quit python motion data streaming.")
+def set_python_action(sender, app_data, user_data):  # チェックボックスに従いアクション送信フラグをオンオフ
+#    mrd.flag_python_action=flip_number(mrd.flag_python_action,"Start python motion data streaming.","Quit python motion data streaming.")
+    mrd.flag_python_action=flip_number(app_data,"Start python motion data streaming.","Quit python motion data streaming.")
 
-def set_enable():# チェックボックスに従いデータ送信フラグをオンオフ
-    mrd.flag_enable_send_made_data=flip_number(mrd.flag_enable_send_made_data,"Start sending data to ESP32.","Quit sending data to ESP32.")
+def set_enable(sender, app_data, user_data): # チェックボックスに従いデータ送信フラグをオンオフ
+    mrd.flag_enable_send_made_data = flip_number(app_data, "Start sending data to ESP32.", "Quit sending data to ESP32.")
 
+#def set_enable():# チェックボックスに従いデータ送信フラグをオンオフ
+#    mrd.flag_enable_send_made_data=flip_number(mrd.flag_enable_send_made_data,"Start sending data to ESP32.","Quit sending data to ESP32.")
+
+#def set_enable(sender, app_data, user_data):
+#    if app_data:  # チェックされた場合
+#        mrd.flag_enable_send_made_data = True
+#else:        # アンチェックされた場合
+#        mrd.flag_enable_send_made_data = False
+        
 
 def set_resv_data():  # チェックボックスに従いデータ送信フラグをオンオフ
     if mrd.flag_resv_data == 0:
@@ -742,13 +733,21 @@ def set_tarminal_send_on():  # ボタン押下でset_flowフラグをオン
             mrd.s_minitermnal_keep[i][1] = 0
 
 
-def flip_number(value,string1,string2): # フラグ切り替え用の真偽反転
-    if value == 0 :
+def flip_number(appdata,string1,string2): # フラグ切り替え用の真偽反転
+    if appdata == True:
         print(string1)
-        return 1
+        return True
     else:
         print(string2)
-        return 0
+        return False
+
+#def flip_number(value,string1,string2): # フラグ切り替え用の真偽反転
+#    if value == 0 :
+#        print(string1)
+#        return 1
+#    else:
+#        print(string2)
+#        return 0
 
 def push_button_flag(string): # 押しボタンでフラグを立てる
     print(string)
@@ -759,31 +758,16 @@ def push_button_flag(string): # 押しボタンでフラグを立てる
 #                                        "Axis monitor displays actual data(received data).")
 
 def change_display_mode(sender, app_data, user_data):
-    # 選択されたラジオボタンのアイテムを取得
     chosen_option = dpg.get_value(sender)
-    # 何をするかに応じて処理を分岐
     if chosen_option == "target":
         mrd.flag_display_mode = 1
         print("Target mode selected")
-        # ここに「target」が選択されたときの処理を記述
     elif chosen_option == "actual":
         mrd.flag_display_mode = 0
         print("Actual mode selected")
-        # ここに「actual」が選択されたときの処理を記述
-        
 
-def change_ros1_output_mode():  # チェックボックスに従いROS1データ送信モードをtarget/actualに切り替え
-    mrd.flag_ros1_output_mode = flip_number(
-        mrd.flag_ros1_output_mode, "Set target data(send data) as ROS1 publish.", "Set actual data(received data) as ROS1 publish.")
-
-def set_send_virtual():  # チェックボックスに従いデータ送信フラグをオンオフ
-    if mrd.flag_send_virtual == 0:
-        mrd.flag_send_virtual = 1
-        print("Start noting. Virtual-Hard Uninplemented.")
-    else:
-        mrd.flag_send_virtual = 0
-        print("Quit nothing. Virtual-Hard Uninplemented")
-
+def change_ros1_output_mode(sender, app_data, user_data):  # チェックボックスに従いROS1データ送信モードをtarget/actualに切り替え
+    mrd.flag_ros1_output_mode = flip_number(app_data, "Set target data(send data) as ROS1 publish.", "Set actual data(received data) as ROS1 publish.")
 
 def ros1_pub():  # チェックボックスに従いROS1パブリッシュフラグをオンオフ
     # print("ROS1 is not available.")
@@ -831,27 +815,26 @@ def set_servo_home():#
     mrd.flag_servo_home = push_button_flag("Set all servo position zero.")
 
 
-# def set_transaction_mode(sender, app_data):
-#    if app_data == "Flow":  # ボタン押下でset_flowフラグをオン
-#        mrd.flag_set_flow = True
-#        mrd.flag_flow_switch = True
-#        #mrd.flag_set_step = False
-#        print("Set flow to Meridian.")
-#    elif app_data == "Step":  # ボタン押下でset_stepフラグをオン
-#        mrd.flag_set_flow = False
-#        mrd.flag_flow_switch = True
-#        #mrd.flag_set_step = True
-#        print("Set step to Meridian.")
+def set_transaction_mode(sender, app_data):
+    if app_data == "Flow":  # ボタン押下でset_flowフラグをオン
+        mrd.flag_set_flow = True
+        #mrd.flag_flow_switch = True
+        mrd.flag_send_data_step_frame = True
+        print("Set flow to Meridian.")
+    elif app_data == "Step":  # ボタン押下でset_stepフラグをオン
+        mrd.flag_set_flow = False
+        #mrd.flag_flow_switch = True
+        mrd.flag_send_data_step_frame = False
+        print("Set step to Meridian.")
 
-# def send_data_step_frame():  # チェックボックスに従いアクション送信フラグをオンオフ
-#    mrd.flag_send_data_step_frame = True
-#    print("Return: Send data and step to the next frame.")
-
+def send_data_step_frame():  # チェックボックスに従いアクション送信フラグをオンオフ
+    mrd.flag_send_data_step_frame = True
+    print("Return: Send data and step to the next frame.")
 
 def joinstate_to_meridim(JointState):
     for i in range(11):
-        mrd.s_meridim_js_sub[21+i * 2] = round(math.degrees(JointState.position[i])*100)*mrd.jspn[i]
-        mrd.s_meridim_js_sub[51+i * 2] = round(math.degrees(JointState.position[11+i])*100)*mrd.jspn[15+i]
+        mrd.s_meridim_js_sub_f[21+i * 2] = round(math.degrees(JointState.position[i])*100)*mrd.jspn[i]
+        mrd.s_meridim_js_sub_f[51+i * 2] = round(math.degrees(JointState.position[11+i])*100)*mrd.jspn[15+i]
 
 
 UDP_SEND_IP = get_udp_send_ip()
@@ -897,7 +880,7 @@ def main():
                 for i in range(0, 15, 1):
                     dpg.add_slider_float(default_value=0, tag="ID L"+str(i),label="L"+str(i),max_value=100,min_value=-100,callback=set_servo_angle,pos=[135,35+i*20], width=80)
             dpg.add_button(label="Home", callback=set_servo_home, pos=[10,340]) #Sendと書いてあるボタンをwindowの右下に設置
-            dpg.add_radio_button(label="display_mode", items=["target", "actual"], callback=change_display_mode, user_data=1, pos=[90, 340], horizontal=True)
+            dpg.add_radio_button(label="display_mode", items=["target", "actual"], callback=change_display_mode, default_value="actual", pos=[90, 340], horizontal=True)
 
         # （画面下段左側）メッセージ表示用ウィンドウ（アドレス・通信エラー等） ==================================================================
         with dpg.window(label="Messege", width=590, height=155, pos=[5, 380]):
@@ -975,8 +958,8 @@ def main():
             dpg.add_button(label="Set", callback=set_miniterminal_data, pos=[150, 148])  # Sendと書いてあるボタンをwindowの右下に設置
             dpg.add_text("Send", pos=[184, 148])
             dpg.add_checkbox(tag="TarminalMode", callback=set_tarminal_send_on, pos=[215, 148])
-            # dpg.add_radio_button(["Flow", "Step"], tag="transaction_mode", pos=[10, 148], callback=set_transaction_mode, horizontal=True)
-            # dpg.add_button(label="Return", pos=[183, 175], callback=send_data_step_frame)  # 右下に設置
+            dpg.add_radio_button(["Flow", "Step"], tag="transaction_mode", pos=[10, 148], callback=set_transaction_mode, default_value="Flow", horizontal=True)
+            dpg.add_button(label="Return", pos=[183, 175], callback=send_data_step_frame)  # 右下に設置
 
 #------------------------------------------------------------------------
 # [ Command ] : コマンド送信/リモコン値表示用ウィンドウ（表示位置:中段/中央）
@@ -1067,6 +1050,14 @@ def main():
             dpg.set_value("pad_R2v", int(_padR2val))
             dpg.set_value("button_data", int(mrd.r_meridim[15]))
 
+            # フローモードの切り替え反映 ===============================================================================================
+            if mrd.r_meridim[0] == MCMD_BOARD_TRANSMIT_ACTIVE:  # フローモード(ボード側が周期制御を持つ)への切り替え
+                dpg.set_value("transaction_mode", 0)
+
+            if mrd.r_meridim[0] == MCMD_BOARD_TRANSMIT_PASSIVE:  # ステップモード(PC側が周期制御を持つ)への切り替え
+                dpg.set_value("transaction_mode", 1)
+                        
+                        
             # ROS1 joint_statesのパブリッシュ ===============================================================================================
             if mrd.flag_ros1_pub:  # ROS送信:joint_statesのpublishを実施
                 if rospy_imported:
