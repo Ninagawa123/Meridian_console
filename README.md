@@ -9,7 +9,7 @@ $ pip3 install dearpygui など, 必要なライブラリをインストール�
 
 # 実行  
 $ CD ~/(Meridian_console.pyのあるディレクトリ)  
-$ python Meridian_console.py [送信先のESP32のIPアドレス　例:192.168.1.12]
+$ python Meridian_console.py [送信先のESP32のIPアドレス　例:192.168.1.12]  
 (送信先のIPアドレスを記入しない場合、pythonコード内のUDP_SEND_IP_DEFで設定された値で接続を試みます)
 
 で実行し、画面が表示されれば成功です. Meridianボードを立ち上げると数秒で接続が確立し, 画面の数字がチラチラと動き始めます.
