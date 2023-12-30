@@ -1,9 +1,9 @@
-# Meridian_console
-Meridianの受信配列を表示したり、Meridianのコマンドを送信するPythonです。
-Dearpyguiを使用しており、ROS1の入出力に対応しています。
+# Meridian_console  
+Meridianの受信配列を表示したり、Meridianのコマンドを送信するPythonです.  
+Dearpyguiを使用しており、ROS1の入出力に対応しています.  
 また、ROS信号あり, ROS信号なしが選べるので, ROSを持たないWinやMacでも手軽にMeridianの通信をテストすることができます.  
-Win, Mac, Ubuntuで動作します。　　
-
+Win, Mac, Ubuntuで動作します.  
+  
 # 準備  
 $ pip3 install dearpygui など, 必要なライブラリをインストールしてください.  
 
