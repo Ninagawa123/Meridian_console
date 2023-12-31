@@ -272,10 +272,11 @@ def meridian_loop():
 # ------------------------------------------------------------------------
 # [ 2-1 ] : チェックサムの確認
                 _checksum[0] = ~np.sum(mrd.r_meridim[:MSG_SIZE-1]) # 受信データに対するチェックサム値の計算
-                _temp_int16 = np.array([0], dtype=np.int16)  # エラーフラグのカウント用変数
+                _temp_int16 = np.int16(0)  # エラーフラグのカウント用変数
+
                 if _checksum[0] != mrd.r_meridim[MSG_SIZE-1]:  # チェックサムがNGの処理
                     # エラーフラグ15ビット目:PCのUDP受信エラーフラグを上げる
-                    _temp_int16[0] = mrd.r_meridim[MSG_ERRS] | 0b1000000000000000
+                    _temp_int16 = (mrd.r_meridim[MSG_ERRS] & 0xFFFF) | 0b1000000000000000
                     mrd.error_count_esp_to_pc += 1  # PCのUDP受信エラーをカウントアップ
 # [ 2-2 ] : チェックサムOKデータのエラーフラグ処理
                 else:
@@ -292,9 +293,9 @@ def meridian_loop():
                         mrd.error_count_esp_skip += 1                    
                     if (mrd.r_meridim[MSG_ERRS] >> 9 & 1) == 1:  # 9ビット目:TeensyのESP経由のPCから受信のフレーム連番スキップフラグ
                         mrd.error_count_tsy_skip += 1
-                    _temp_int16[0] = mrd.r_meridim[MSG_ERRS] & 0b0000000011111111  # サーボ値の受信に失敗したサーボID(エラーフラグ下位8ビット）を調べる
+                    _temp_int16 = mrd.r_meridim[MSG_ERRS] & 0b0000000011111111  # サーボ値の受信に失敗したサーボID(エラーフラグ下位8ビット）を調べる
                     mrd.error_servo_id_past = mrd.error_servo_id
-                    if _temp_int16[0] > 0:
+                    if _temp_int16 > 0:
                         mrd.error_count_servo_skip += 1
                         if mrd.r_meridim[MSG_ERRS] & 0b0000000011111111 > 99:
                             mrd.error_servo_id = "id_R" + str(int(mrd.r_meridim[MSG_ERRS] & 0b0000000011111111)-100)
@@ -311,7 +312,7 @@ def meridian_loop():
                             print("Found servo error: "+mrd.error_servo_id)
 
 # [ 2-4 ] : 末端処理
-                    _temp_int16[0] = mrd.r_meridim[MSG_ERRS] & 0b0111111111111111 # エラーフラグ15ビット目(PCのUDP受信エラーフラグ)を下げる
+                    _temp_int16 = mrd.r_meridim[MSG_ERRS] & 0b0111111111111111 # エラーフラグ15ビット目(PCのUDP受信エラーフラグ)を下げる
                     mrd.frame_sync_r_resv = mrd.r_meridim_ushort[1] # フレームスキップチェック用のカウントの代入
 
 # ------------------------------------------------------------------------
@@ -342,9 +343,9 @@ def meridian_loop():
                         mrd.frame_sync_r_expect = 0
 
                     if (mrd.frame_sync_r_resv == mrd.frame_sync_r_expect): # 受信したカウントが予想通りであればスキップなし
-                        _temp_int16[0] &= 0b1111111011111111 # PCのESP経由Teensyからの連番スキップフラグを下げる
+                        _temp_int16 &= 0b1111111011111111 # PCのESP経由Teensyからの連番スキップフラグを下げる
                     else:
-                        _temp_int16[0] |= 0b0000000100000000 # PCのESP経由Teensyからの連番スキップフラグを上げる
+                        _temp_int16 |= 0b0000000100000000 # PCのESP経由Teensyからの連番スキップフラグを上げる
                         mrd.frame_sync_r_expect = mrd.frame_sync_r_resv # 受信カウントの方が多ければズレを検出し, 追いつく
                         mrd.error_count_pc_skip += 1  # スキップカウントをプラス
 
@@ -514,7 +515,7 @@ def meridian_loop():
                         mrd.frag_reset_errors = False
 
 # ▶︎ 5-7-2 : キープしたエラーフラグを格納
-                    mrd.s_meridim[MSG_ERRS] = _temp_int16[0]
+                    mrd.s_meridim[MSG_ERRS] = _temp_int16
 
 # [ 5-8 ] : 送信用シーケンス番号の作成と格納
                     mrd.frame_sync_s += 1  # 送信用のframe_sync_sをカウントアップ
