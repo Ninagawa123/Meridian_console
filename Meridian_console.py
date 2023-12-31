@@ -5,7 +5,7 @@
 # Izumi Ninagawa & Meridian project
 # MIT License
 
-# 2023.12.30 これまでのグローバル変数をクラスに格納. 一部をnumpy化. sleepを入れてCPU負荷を軽減
+# 2023.12.31 これまでのグローバル変数をクラスに格納. 一部をnumpy化. sleepを入れてCPU負荷を軽減
 
 # Meridian console 取扱説明書
 #
