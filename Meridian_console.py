@@ -8,6 +8,7 @@
 # 2023.12.30 フロー送信/ステップ送信の切り替え,データ表示のターゲット/実行結果の切り替え,自身のIPの自動取得
 # 2023.12.30 これまでのグローバル変数をクラスに格納. 一部をnumpy化. sleepを入れてCPU負荷を軽減
 # 2023.12.31 エラー受信値のオーバーフローバグを修正
+# 2024.01.05 起動時のモードを"Actual"に修正
 
 # Meridian console 取扱説明書
 #
@@ -797,7 +798,7 @@ def main():
                 for i in range(0, 15, 1):
                     dpg.add_slider_float(default_value=0, tag="ID L"+str(i), label="L"+str(i), max_value=100, min_value=-100, callback=set_servo_angle, pos=[135, 35+i*20], width=80)
             dpg.add_button(label="Home", callback=set_servo_home, pos=[10, 340])  # Sendと書いてあるボタンをwindowの右下に設置
-            dpg.add_radio_button(label="display_mode", items=["Target", "Actual"], callback=change_display_mode, default_value="actual", pos=[90, 340], horizontal=True)
+            dpg.add_radio_button(label="display_mode", items=["Target", "Actual"], callback=change_display_mode, default_value="Actual", pos=[90, 340], horizontal=True)
 
 # ------------------------------------------------------------------------
 # [ Message ] : メッセージ表示用ウィンドウ（表示位置:下段/左側）
