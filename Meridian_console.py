@@ -9,6 +9,7 @@
 # 2023.12.30 これまでのグローバル変数をクラスに格納. 一部をnumpy化. sleepを入れてCPU負荷を軽減
 # 2023.12.31 エラー受信値のオーバーフローバグを修正
 # 2024.01.05 起動時のモードを"Actual"に修正
+# 2024.01.05 ミニターミナルにset&sendを追加し, 送信方法を変更. 【Mini Terminal】参照
 
 # Meridian console 取扱説明書
 #
@@ -38,10 +39,10 @@
 #
 # 【Mini Terminal】
 # Meridim配列のデータをインプットし8つまで同時送信することができます
-# MeridianのIndex（Meridim90であれば0~89）とDataを入力し, Setボタンを押し, 
-# Sendにチェックを入れることでデータが送信されます
-# ※Setを行うことでバッファにデータがセットされ, Sendのチェックを入れることでそのデータが送信されつづけます
-#  Indexの範囲外のデータは無効となり送信されませんまた, チェックを外した時に送信バッファの各Indexに-1が代入されます
+# MeridianのIndex（Meridim90であれば0~89）とDataを入力し, 
+# Set&Sendボタンでデータを1回送信します. 
+# Setを押した後、Continuousチェックを入れることで同じデータを毎フレーム送信します.  
+# Indexの範囲外のデータは無効となり送信されません. また, チェックを外した時に送信バッファの各Indexに-1が代入されます
 # ◯Flow ◯Step : フローモードとステップモードを切り替えます 
 # [Next frame]: ステップモード時に1フレームだけ次に進みます
 #
@@ -78,7 +79,7 @@ except ImportError:
 
 
 # 定数
-TITLE_VERSION = "Meridian_Console_v23.1230" # DPGのウィンドウタイトル兼バージョン表示
+TITLE_VERSION = "Meridian_Console_v24.0105" # DPGのウィンドウタイトル兼バージョン表示
 UDP_RESV_PORT = 22222                       # 受信ポート
 UDP_SEND_PORT = 22224                       # 送信ポート
 UDP_SEND_IP_DEF = "192.168.1.85"            # 送信先のESP32のIPアドレス 21
@@ -146,7 +147,8 @@ class MeridianConsole:
         self.flag_send_virtual = 0              # ハードウェアを接続しないで動作させる場合のバーチャルハードのオンオフフラグ
         self.flag_send_motion = 0               # 計算モーション送信のオンオフフラグ
         self.flag_set_miniterminal_data = 0     # ミニターミナルの値をセットするボタンのためのフラグ
-        self.flag_send_miniterminal_data = 0    # ミニターミナルの値を送信するボタンのためのフラグ
+        self.flag_send_miniterminal_data_cont = 0    # ミニターミナルの値を送信するボタンのためのフラグ
+        self.flag_send_miniterminal_data_once = 0    # ミニターミナルの値を1回送信する
         self.flag_tarminal_mode_send = 0        # miniterminalを有効にし, コマンドを優先する
         self.flag_demo_action = 0               # デモ/テスト用の計算モーション送信のオンオフフラグ
         self.flag_python_action = 0             # ユーザー自作python有効のオンオフフラグ
@@ -544,6 +546,11 @@ def meridian_loop():
                             print("Sending data : ")
                             print(print_string[:-2])  # 末尾のカンマ以外を表示
                             mrd.flag_tarminal_mode_send = 1
+                            
+                        if mrd.flag_send_miniterminal_data_once == 1:    # ミニターミナルの値を1回送信する
+                            mrd.flag_tarminal_mode_send = 0
+                            mrd.flag_send_miniterminal_data_once = 0
+
 
 # [ 5-10 ] : 格納した送信データについてチェックサムを追加
                     _checksum[0] = ~np.sum(mrd.s_meridim[:MSG_SIZE-1])
@@ -718,6 +725,7 @@ def set_miniterminal_data():  # ミニターミナルのセットボタンが押
                         "] out of range, "
     print("Set mini tarminal data : ")
     print(print_string[:-2])  # 末尾のカンマ以外を表示
+    
 
 # [Mini Terminal] ウィンドウのSendボタン処理
 def set_tarminal_send_on():  # ボタン押下でset_flowフラグをオン
@@ -732,6 +740,15 @@ def set_tarminal_send_on():  # ボタン押下でset_flowフラグをオン
             mrd.s_minitermnal_keep[i][0] = -1
             # 該当しないデータにはインデックスに-1を指定して送信データに反映されないようにしておく
             mrd.s_minitermnal_keep[i][1] = 0
+            
+            
+# [Mini Terminal] ウィンドウのset&sendボタン処理
+def set_and_send_miniterminal_data():  # ミニターミナルのセットボタンが押下されたら送信データをセットする
+    set_miniterminal_data()
+    set_tarminal_send_on()
+    mrd.flag_send_miniterminal_data_once = 1    # ミニターミナルの値を1回送信する
+    
+    
             
 # [Mini Terminal] ウィンドウのFlow, Step 切り替えラジオボタン処理
 def set_transaction_mode(sender, app_data):
@@ -908,9 +925,10 @@ def main():
             dpg.add_input_text(tag="s_data6", decimal=True, default_value="", width=60, pos=[175, 95])
             dpg.add_input_text(tag="s_index7", decimal=True, default_value="", width=40, pos=[130, 120])
             dpg.add_input_text(tag="s_data7", decimal=True, default_value="", width=60, pos=[175, 120])
-            dpg.add_button(label="Set", callback=set_miniterminal_data, pos=[150, 148])  # Sendと書いてあるボタンをwindowの右下に設置
-            dpg.add_text("Send", pos=[184, 148])
-            dpg.add_checkbox(tag="TarminalMode", callback=set_tarminal_send_on, pos=[215, 148])
+            dpg.add_button(label="Set", callback=set_miniterminal_data, pos=[136, 148])
+            dpg.add_button(label="Set&Send", callback=set_and_send_miniterminal_data, pos=[171, 148])
+            dpg.add_text("Continuous ", pos=[140, 175])
+            dpg.add_checkbox(tag="SendContinuously", callback=set_tarminal_send_on, pos=[215, 175])
             dpg.add_radio_button(["Flow", "Step"], tag="transaction_mode", pos=[10, 148], callback=set_transaction_mode, default_value="Flow", horizontal=True)
             dpg.add_button(label=" Next frame ", pos=[15, 175], callback=send_data_step_frame)  # 右下に設置
 
