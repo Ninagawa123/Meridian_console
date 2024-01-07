@@ -83,7 +83,7 @@ except ImportError:
 
 
 # 定数
-TITLE_VERSION = "Meridian_Console_v24.0105" # DPGのウィンドウタイトル兼バージョン表示
+TITLE_VERSION = "Meridian_Console_v24.0107" # DPGのウィンドウタイトル兼バージョン表示
 UDP_RESV_PORT = 22222                       # 受信ポート
 UDP_SEND_PORT = 22224                       # 送信ポート
 UDP_SEND_IP_DEF = "192.168.1.85"            # 送信先のESP32のIPアドレス 21
