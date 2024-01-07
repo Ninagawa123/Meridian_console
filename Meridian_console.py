@@ -10,6 +10,7 @@
 # 2023.12.31 エラー受信値のオーバーフローバグを修正
 # 2024.01.05 起動時のモードを"Actual"に修正
 # 2024.01.05 ミニターミナルにset&sendを追加し, 送信方法を変更. 【Mini Terminal】参照
+# 2024.01.07 ターミナルに送受信データを表示する機能を追加. 
 
 # Meridian console 取扱説明書
 #
@@ -51,7 +52,10 @@
 #
 # 【Message】
 # IPと各経路のエラーカウント, エラー率, フレーム数, 動作周波数を表示します
+# ResetCycle: 周波数のカウントをリセットするボタンです
 # ResetCounter: カウンタの値をリセットするボタンです
+# disp_send: 送信データをターミナルに表示するチェックボックスです
+# disp_rcvd: 受信データをターミナルに表示するチェックボックスです
 # TsySKIP, PcSKIP: 連番データの取りこぼし数を表示します
 # PS4リモコン接続時に受信スキップ回数が5%ほど検出されるのは, 現在の仕様では正常な動作です
 
@@ -163,6 +167,8 @@ class MeridianConsole:
         self.flag_ros1_output_mode = 0          # ROS1にパブリッシュするデータ 1:送信データ(target) 0:受信データ(actual)
         self.frag_reset_cycle = False           # ボードのフレームの周波数をリセットする
         self.frag_reset_errors = False          # Meridimのエラーカウントをリセットする
+        self.flag_disp_send = 0                 # ターミナルに送信データを表示する
+        self.flag_disp_rcvd = 0                 # ターミナルに受信データを表示する
 
         # メッセージ表示用
         self.message0 = "This PC's IP adress is "+get_local_ip()
@@ -271,6 +277,16 @@ def meridian_loop():
                     '90H', _r_bin_data)  # unsignedshort型
                 mrd.r_meridim_char = struct.unpack('180b', _r_bin_data)
                 mrd.message1 = "UDP data receiving from "+UDP_SEND_IP  # 受信中のメッセージ表示
+
+# [ 1-3 ] : 送信UDPデータのターミナル表示
+                if mrd.flag_disp_send:
+                    mrd.flag_disp_send=1
+                    print('send:'+' '.join(map(str, mrd.s_meridim)))
+                    
+# [ 1-4 ] : 受信UDPデータのターミナル表示
+                if mrd.flag_disp_rcvd:
+                    mrd.flag_disp_rcvd=1
+                    print('rcvd:'+' '.join(map(str, mrd.r_meridim)))
 
 # ------------------------------------------------------------------------
 # [ 2 ] : 受信データのチェック
@@ -643,7 +659,44 @@ def change_display_mode(sender, app_data, user_data):
 def set_servo_home():
     mrd.flag_servo_home = push_button_flag("Set all servo position zero.")
 
-# [Button Input] ウィンドウ のボタン処理
+# [Message] ウィンドウの送信データ表示処理
+def set_disp_send():
+    if mrd.flag_disp_send == 0:
+        mrd.flag_disp_send = 2
+        print("Display send meridim data.")
+    else:
+        mrd.flag_disp_send = 0
+        print("Stop to display send meridim data.")
+
+# [Message] ウィンドウの受信データ表示処理
+def set_disp_rcvd():
+    if mrd.flag_disp_rcvd == 0:
+        mrd.flag_disp_rcvd = 2
+        print("Display received meridim data.")
+    else:
+        mrd.flag_disp_rcvd = 0
+        print("Stop to display received meridim data.")
+
+# [Message] ウィンドウの reset cycle ボタン処理
+def reset_cycle():  # カウンターのリセット
+    mrd.frag_reset_cycle = True
+    
+# [Message] ウィンドウの reset counter ボタン処理
+def reset_counter():  # カウンターのリセット
+    mrd.loop_count = 1
+    mrd.error_count_pc_to_esp = 0
+    mrd.error_count_esp_to_tsy = 0
+    mrd.error_count_tsy_to_esp = 0
+    mrd.error_count_esp_to_pc = 0
+    mrd.error_count_tsy_skip = 0
+    mrd.error_count_esp_skip = 0
+    mrd.error_count_pc_skip = 0
+    mrd.error_count_servo_skip = 0
+    mrd.frag_reset_errors = True
+    mrd.error_servo_id = "None"
+    mrd.start = time.time()
+
+# [Button Input] ウィンドウ のリモコンボタン処理
 def pad_btn_panel_on(sender, app_data, user_data):
     mrd.pad_button_panel_short
     if (mrd.pad_button_panel_short[0] & user_data) == 0:
@@ -653,6 +706,10 @@ def pad_btn_panel_on(sender, app_data, user_data):
         mrd.pad_button_panel_short[0] = mrd.pad_button_panel_short[0] ^ user_data
         print(f'Btn:{mrd.pad_button_panel_short[0]}')
 
+# [sensor monitor] ウィンドウのSetYawボタン処理
+def set_yaw_center():  # IMUのヨー軸センターリセットフラグをcommand_send_trial回上げる（コマンドをcommand_send_trial回送信する）
+    mrd.flag_update_yaw = mrd.command_send_trial
+        
 # [command] ウィンドウのPowerフラグ処理（サーボのオンオフ）
 def set_servo_power(sender, app_data, user_data):  
     if app_data:
@@ -728,8 +785,8 @@ def set_miniterminal_data():  # ミニターミナルのセットボタンが押
     
 
 # [Mini Terminal] ウィンドウのSendボタン処理
-def set_tarminal_send_on():  # ボタン押下でset_flowフラグをオン
-    if mrd.flag_tarminal_mode_send == 0:
+def set_tarminal_continuous_on(sender, app_data):  # ボタン押下でset_flowフラグをオン
+    if app_data:
         mrd.flag_tarminal_mode_send = 2
         print("Start to send miniterminal data.")
     else:
@@ -741,6 +798,21 @@ def set_tarminal_send_on():  # ボタン押下でset_flowフラグをオン
             # 該当しないデータにはインデックスに-1を指定して送信データに反映されないようにしておく
             mrd.s_minitermnal_keep[i][1] = 0
             
+# [Mini Terminal] ウィンドウのSendボタン処理
+
+
+def set_tarminal_send_on():  # ボタン押下でset_flowフラグをオン
+    if mrd.flag_tarminal_mode_send == 0:
+        mrd.flag_tarminal_mode_send = 2
+        print("Set to send miniterminal data.")
+    else:
+        mrd.flag_tarminal_mode_send = 0
+        #print("Stop to send miniterminal data.")
+        for i in range(8):
+            # 該当しないデータにはインデックスに-1を指定して送信データに反映されないようにしておく
+            mrd.s_minitermnal_keep[i][0] = -1
+            # 該当しないデータにはインデックスに-1を指定して送信データに反映されないようにしておく
+            mrd.s_minitermnal_keep[i][1] = 0
             
 # [Mini Terminal] ウィンドウのset&sendボタン処理
 def set_and_send_miniterminal_data():  # ミニターミナルのセットボタンが押下されたら送信データをセットする
@@ -776,28 +848,6 @@ def send_data_step_frame():  # チェックボックスに従いアクション�
 # ================================================================================================================
 
 def main():
-
-# dpg用関数 ===========================================================
-    def set_yaw_center():  # IMUのヨー軸センターリセットフラグを10上げる（コマンドを10回送信する）
-        mrd.flag_update_yaw = mrd.command_send_trial
-
-    def reset_counter():  # カウンターのリセット
-        mrd.loop_count = 1
-        mrd.error_count_pc_to_esp = 0
-        mrd.error_count_esp_to_tsy = 0
-        mrd.error_count_tsy_to_esp = 0
-        mrd.error_count_esp_to_pc = 0
-        mrd.error_count_tsy_skip = 0
-        mrd.error_count_esp_skip = 0
-        mrd.error_count_pc_skip = 0
-        mrd.error_count_servo_skip = 0
-        mrd.frag_reset_errors = True
-        mrd.error_servo_id = "None"
-        mrd.start = time.time()
-
-    def reset_cycle():  # カウンターのリセット
-        mrd.frag_reset_cycle = True
-        
     while (True):
 
 # dpg描画処理1 ==========================================================
@@ -821,8 +871,13 @@ def main():
 # [ Message ] : メッセージ表示用ウィンドウ（表示位置:下段/左側）
 # ------------------------------------------------------------------------
         with dpg.window(label="Messege", width=590, height=155, pos=[5, 380]):
-            dpg.add_button(label="ResetCycle",callback=reset_cycle, width=80, pos=[390, 30])
-            dpg.add_button(label="ResetCounter",callback=reset_counter, width=90, pos=[480, 30])
+
+            dpg.add_text("disp_send ", pos=[383, 53])
+            dpg.add_checkbox(tag="disp_send", callback=set_disp_send, pos=[452, 53])
+            dpg.add_text("disp_rcvd ", pos=[483, 53])
+            dpg.add_checkbox(tag="disp_rcvd", callback=set_disp_rcvd, pos=[551, 53])
+            dpg.add_button(label="ResetCycle",callback=reset_cycle, width=80, pos=[390, 28])
+            dpg.add_button(label="ResetCounter",callback=reset_counter, width=90, pos=[480, 28])
             dpg.add_text(mrd.message0, tag="DispMessage0")
             dpg.add_text(mrd.message1, tag="DispMessage1")
             dpg.add_text(mrd.message2, tag="DispMessage2")
@@ -867,7 +922,7 @@ def main():
             dpg.add_text("<- ROS1", pos=[210, 83])
 
             dpg.add_checkbox(tag="ros1_output_mode", callback=change_ros1_output_mode, user_data=1, pos=[305, 62])
-            dpg.add_text("targ/revd", pos=[236, 62])
+            dpg.add_text("targ/rcvd", pos=[236, 62])
 
             dpg.draw_rectangle(pmin=[80, -4], pmax=[190, 95], color=(100, 100, 100, 255), thickness=1.0, fill=(0, 0, 0, 0))
             dpg.draw_line(p1=[84, 22], p2=[186, 22], color=(100, 100, 100, 255), thickness=1.0)
@@ -928,7 +983,7 @@ def main():
             dpg.add_button(label="Set", callback=set_miniterminal_data, pos=[136, 148])
             dpg.add_button(label="Set&Send", callback=set_and_send_miniterminal_data, pos=[171, 148])
             dpg.add_text("Continuous ", pos=[140, 175])
-            dpg.add_checkbox(tag="SendContinuously", callback=set_tarminal_send_on, pos=[215, 175])
+            dpg.add_checkbox(tag="SendContinuously",callback=set_tarminal_continuous_on, pos=[215, 175])
             dpg.add_radio_button(["Flow", "Step"], tag="transaction_mode", pos=[10, 148], callback=set_transaction_mode, default_value="Flow", horizontal=True)
             dpg.add_button(label=" Next frame ", pos=[15, 175], callback=send_data_step_frame)  # 右下に設置
 
