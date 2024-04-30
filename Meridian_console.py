@@ -11,6 +11,7 @@
 # 2024.01.05 起動時のモードを"Actual"に修正
 # 2024.01.05 ミニターミナルにset&sendを追加し, 送信方法を変更. 【Mini Terminal】参照
 # 2024.01.07 ターミナルに送受信データを表示する機能を追加. 
+# 2024.04.30 L2R2ボタンのアナログ値の表示を修正.
 
 # Meridian console 取扱説明書
 #
@@ -83,10 +84,10 @@ except ImportError:
 
 
 # 定数
-TITLE_VERSION = "Meridian_Console_v24.0107" # DPGのウィンドウタイトル兼バージョン表示
+TITLE_VERSION = "Meridian_Console_v24.0430" # DPGのウィンドウタイトル兼バージョン表示
 UDP_RESV_PORT = 22222                       # 受信ポート
 UDP_SEND_PORT = 22224                       # 送信ポート
-UDP_SEND_IP_DEF = "192.168.1.85"            # 送信先のESP32のIPアドレス 21
+UDP_SEND_IP_DEF = "192.168.1.xx"            # 送信先のESP32のIPアドレス 21
 MSG_SIZE = 90                               # Meridim配列の長さ(デフォルトは90)
 MSG_BUFF = MSG_SIZE * 2                     # Meridim配列のバイト長さ
 MSG_ERRS = MSG_SIZE - 2                     # Meridim配列のエラーフラグの格納場所（配列の最後から２番目）
@@ -1028,16 +1029,12 @@ def main():
             dpg.set_value("pad_Ly", int(mrd.r_meridim_char[32]))
             dpg.set_value("pad_Rx", int(mrd.r_meridim_char[35]))
             dpg.set_value("pad_Ry", int(mrd.r_meridim_char[34]))
-            _padL2val = (mrd.r_meridim_char[37])
-            if (_padL2val < 0):
-                _padL2val = 256+_padL2val
-            if (mrd.r_meridim[15] & 256 == 0):
-                _padL2val = 0
-            _padR2val = (mrd.r_meridim_char[36])
-            if (_padR2val < 0):
-                _padR2val = 256+_padR2val
-            if (mrd.r_meridim[15] & 512 == 0):
-                _padR2val = 0
+            
+            _padL2val_bin = struct.pack('b', mrd.r_meridim_char[36])
+            _padL2val = struct.unpack('B', _padL2val_bin)[0]
+            _padR2val_bin = struct.pack('b', mrd.r_meridim_char[37])
+            _padR2val = struct.unpack('B', _padR2val_bin)[0]
+            
             dpg.set_value("pad_L2v", int(_padL2val))
             dpg.set_value("pad_R2v", int(_padR2val))
             dpg.set_value("button_data", int(mrd.r_meridim[15]))
