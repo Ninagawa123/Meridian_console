@@ -4,10 +4,10 @@ Dearpyguiを使用しており、ROS1の入出力に対応しています.
 また、ROS信号あり, ROS信号なしが選べるので, ROSを持たないWinやMacでも手軽にMeridianの通信をテストすることができます.  
 Win, Mac, Ubuntuで動作します.  
   
-# 準備  
+### 準備  
 $ pip3 install dearpygui など, 必要なライブラリをインストールしてください.  
 
-# 実行  
+### 実行  
 $ CD ~/(Meridian_console.pyのあるディレクトリ)  
 $ python Meridian_console.py [送信先のESP32のIPアドレス　例:192.168.1.12]  
 (送信先のIPアドレスを記入しない場合、pythonコード内のUDP_SEND_IP_DEFで設定された値で接続を試みます)  
@@ -17,10 +17,10 @@ $ python Meridian_console.py [送信先のESP32のIPアドレス　例:192.168.1
   
 起動時はロボットのサーボは脱力しており、サーボの角度を手で動かすとスライダーに反映されます.  
   
-# 終了方法  
+### 終了方法  
 ターミナルでctrl + c を押して終了します.  
   
-# 画面の解説  
+### 画面の解説  
 <img width="851" alt="console20231230" src="https://github.com/Ninagawa123/Meridian_console/assets/8329123/0d2df355-8369-44ce-b4e0-bdbb73569354">
   
 #### Axis Monitor  
