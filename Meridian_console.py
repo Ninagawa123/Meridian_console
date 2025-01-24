@@ -293,7 +293,7 @@ def meridian_loop():
 # [ 2 ] : 受信データのチェック
 # ------------------------------------------------------------------------
 # [ 2-1 ] : チェックサムの確認
-                _checksum[0] = ~np.sum(mrd.r_meridim[:MSG_SIZE-1]) # 受信データに対するチェックサム値の計算
+                _checksum[0] = np.int16(~np.sum(mrd.r_meridim[:MSG_SIZE-1], dtype=np.int16)) # 受信データに対するチェックサム値の計算
                 _temp_int16 = np.int16(0)  # エラーフラグのカウント用変数
 
                 if _checksum[0] != mrd.r_meridim[MSG_SIZE-1]:  # チェックサムがNGの処理
