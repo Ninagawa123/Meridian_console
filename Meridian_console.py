@@ -570,7 +570,8 @@ def meridian_loop():
 
 
 # [ 5-10 ] : 格納した送信データについてチェックサムを追加
-                    _checksum[0] = ~np.sum(mrd.s_meridim[:MSG_SIZE-1])
+                    s_meridim_int16 = np.array(mrd.s_meridim[:MSG_SIZE-1], dtype=np.int16)
+                    _checksum[0] = np.int16(~np.sum(s_meridim_int16, dtype=np.int16))
                     mrd.s_meridim[MSG_SIZE-1] = _checksum[0]
 
 # ------------------------------------------------------------------------
