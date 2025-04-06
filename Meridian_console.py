@@ -262,12 +262,11 @@ def is_valid_ip(ip):  # IPアドレスの書式確認
 
 
 def load_udp_send_ip(filename="board_ip.txt"):  # 設定ファイルからIP読み取り
-
-    # このファイル（Meridian_console.py）と同じディレクトリを取得
     script_dir = os.path.dirname(os.path.abspath(__file__))
     filepath = os.path.join(script_dir, filename)
 
     ip = None
+
     if os.path.exists(filepath):
         with open(filepath, "r") as f:
             for line in f:
@@ -275,26 +274,28 @@ def load_udp_send_ip(filename="board_ip.txt"):  # 設定ファイルからIP読�
                 if line.startswith("UDP_SEND_IP_DEF="):
                     ip = line.split("=", 1)[1].strip().strip('"')
                     break
-        if ip is None:
-            print("UDP_SEND_IP_DEF is not defined in board_ip.txt.")
+        if ip and not is_valid_ip(ip):
+            print(
+                'Please set UDP_SEND_IP_DEF in board_ip.txt in the format like "192.168.x.xx".')
+            ip = None
     else:
         print("board_ip.txt not found in the same directory as this script.")
 
-    if ip and is_valid_ip(ip):
-        return ip
-    elif ip:
-        print(
-            'Please set UDP_SEND_IP_DEF in board_ip.txt in the format like "192.168.x.xx".')
-    else:
-        print("Enter IP address manually.")
+    # IPが正しく取得できなかった場合は手動入力
+    if not ip:
+        while True:
+            user_ip = input(
+                "Enter the destination IP address (e.g. 192.168.1.17): ").strip()
+            if is_valid_ip(user_ip):
+                ip = user_ip
+                # board_ip.txt に保存
+                with open(filepath, "w") as f:
+                    f.write(f'UDP_SEND_IP_DEF="{ip}"\n')
+                print(f"Saved IP to {filename}")
+                break
+            print("Invalid IP format. Try again.")
 
-    # コンソールから入力を促す
-    while True:
-        user_ip = input(
-            "Enter the destination IP address (e.g. 192.168.3.39): ").strip()
-        if is_valid_ip(user_ip):
-            return user_ip
-        print("Invalid IP format. Try again.")
+    return ip
 
 
 UDP_SEND_IP_DEF = load_udp_send_ip()        # 送信先のESP32のIPアドレス 21
