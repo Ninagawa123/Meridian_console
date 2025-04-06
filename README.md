@@ -1,12 +1,12 @@
 # [Meridian_console](https://github.com/Ninagawa123/Meridian_console) 
 Meridian consoleは, ロボットのリアルタイムなデジタルツイン化を実現するmeridian flow systemの一部です.  
 ESP32等のwifi付きマイコンボードとペアで使用することで, ロボットの状態情報をデバイス間で100Hzの頻度で共有することができます.  
-<p align="center"><img src="image/console_meridianflow_20250406.png" width="800" alt="console_meridianflow_20250406.png"></p>
+<p align="center"><img src="image/console_meridianflow_20250406.png" width="800" alt="console_meridianflow_20250406.png"></p>  
 Meridian_console.pyをPCで実行することで, PC側で受け取った情報を表示したり, コマンドを送信したりすることができます.  
 現在, ROS1の入出力およびredisの読み取りに対応しています.  
 ROSを持たないWinやMacにも対応しており, 手軽にMeridianの通信をテストすることができます.  
 Win, Mac, Ubuntuで動作します.  
-
+  
 ## 動作確認に必要なもの  
 - pythonが動くPC  
 - Meridianが書き込まれたマイコンボード(ESP32_DevkitC等)  
