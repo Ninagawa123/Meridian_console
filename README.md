@@ -1,7 +1,10 @@
 # [Meridian_console](https://github.com/Ninagawa123/Meridian_console) 
-Meridianの受信配列を表示したり, Meridianのコマンドを送信するPythonです.  
-Dearpyguiを使用しており, ROS1の入出力に対応しています.  
-また, ROS信号あり, ROS信号なしが選べるので, ROSを持たないWinやMacでも手軽にMeridianの通信をテストすることができます.  
+Meridian_consoleは, ロボットのリアルタイムなデジタルツイン化を実現する"Meridian"システムの一部です.  
+ESP32等のwifi付きマイコンボードとペアで使用することで, ロボットの状態情報をデバイス間で100Hzの頻度で共有することができます.  
+
+このPythonコードをPCで実行することで, PC側で受け取った情報を表示したり, コマンドを送信することができます.  
+現在, ROS1の入出力およびredisの読み取りに対応しています.  
+ROSを持たないWinやMacにも対応しており, 手軽にMeridianの通信をテストすることができます.  
 Win, Mac, Ubuntuで動作します.  
   
 ## 準備  
@@ -9,8 +12,8 @@ $ pip install numpy
 $ pip install dearpygui  
 $ pip install redis  
 など, 必要なライブラリをインストールしてください.  
-
-## 実行  
+  
+## 実行方法  
 $ CD ~/(Meridian_console.pyのあるディレクトリ)  
 $ python Meridian_console.py [送信先のESP32のIPアドレス 例:192.168.1.17]  
   
