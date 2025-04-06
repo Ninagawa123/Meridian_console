@@ -1,1 +1,1 @@
-UDP_SEND_IP_DEF="192.168.xxx.xxx" 
+UDP_SEND_IP_DEF="192.168.xxxx.xxx" 
