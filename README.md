@@ -1,13 +1,18 @@
 # [Meridian_console](https://github.com/Ninagawa123/Meridian_console) 
-Meridian_consoleは, ロボットのリアルタイムなデジタルツイン化を実現する"Meridian"システムの一部です.  
+Meridian consoleは, ロボットのリアルタイムなデジタルツイン化を実現するmeridian flow systemの一部です.  
 ESP32等のwifi付きマイコンボードとペアで使用することで, ロボットの状態情報をデバイス間で100Hzの頻度で共有することができます.  
 
 <img src="image/console_meridianflow_20250406.png" width="800" alt="console_meridianflow_20250406.png">
 
-このPythonコードをPCで実行することで, PC側で受け取った情報を表示したり, コマンドを送信することができます.  
+Meridian_console.pyをPCで実行することで, PC側で受け取った情報を表示したり, コマンドを送信したりすることができます.  
 現在, ROS1の入出力およびredisの読み取りに対応しています.  
 ROSを持たないWinやMacにも対応しており, 手軽にMeridianの通信をテストすることができます.  
 Win, Mac, Ubuntuで動作します.  
+
+## 動作確認に必要なもの  
+- pythonが動くPC  
+- Meridianが書き込まれたマイコンボード(ESP32_DevkitC等)  
+- Meridian専用Board (必要に応じて)  
   
 ## 準備  
 $ pip install numpy  
@@ -22,16 +27,17 @@ $ python Meridian_console.py [送信先のESP32のIPアドレス 例:192.168.1.1
 ※送信先のIPアドレスを記入しない場合, board_ip.txtで設定された値で接続を試みます.    
 ※IPアドレス情報が見つからない場合は, ターミナルで入力を促されます. 内容はboard_ip.txtに保存されます.  
   
-上記を実行し, 画面が表示されれば成功です. Meridianボードを立ち上げると数秒で接続が確立し, 画面の数字がチラチラと動き始めます.  
+上記を実行し, 画面が表示されれば成功です.  
+別途用意したMeridianボードを起動すると, 数秒で接続が確立し, 画面の数字がチラチラと動き始めます.  
 標準設定の通信速度はTeensy4.0もしくはESP32側で決定され, デフォルトでは100Hz, 1秒間に100回の往復通信を行います.  
   
-起動時はロボットのサーボは脱力しており, サーボの角度を手で動かすとスライダーに反映されます.  
+起動時はロボットのサーボは脱力しており, サーボの軸角度を手で動かすとスライダーに反映されます.  
   
 ## 終了方法  
 ターミナルでctrl + c を押して終了します.  
   
 ## 画面の解説  
-<img width="851" alt="console20231230" src="https://github.com/Ninagawa123/Meridian_console/assets/8329123/0d2df355-8369-44ce-b4e0-bdbb73569354">
+<img src="image/console_img_20250406..png" width="851" alt="console_img_20250406..png">
   
 #### Axis Monitor  
 受信したサーボの角度を表示します.  
@@ -51,6 +57,7 @@ Python : ユーザー定義のpythonコードを反映します.
 Enable : Demoやpythonを送信に反映します.  
 ->ROS1 : ROS1のjointデータをパブリッシュします.（Rvisと連動できます）  
 <-ROS1 : ROS1のサブスクライブします.(動作未確認)  
+<-Redis: Redisのデータを読み取ります.(sim2real等で使用)  
 Control Pad Monitor: ESP32やTeensyに接続されたリモコンの値を標準化して表示します.  
   
 デモの実行例  
@@ -77,4 +84,6 @@ TsySKIP, PcSKIP: 連番データの取りこぼし数を表示します.
 
 #### 最近の修正
 2025.xx.xx リセットボタンやリモコンアナログ入力値表示など細かな修正をしました.  
-2025.04.06 ESP32のwifiIPをboard_ip.txtに格納するようにし, 未設定時はターミナルで入力するようにしました.
+2025.04.06 ESP32のwifiIPをboard_ip.txtに格納するようにし, 未設定時はターミナルで入力するようにしました.  
+2025.04.06 Redisの読み取り機能を追加しました.  
+
