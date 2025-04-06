@@ -12,6 +12,7 @@
 # 2024.01.05 ミニターミナルにset&sendを追加し, 送信方法を変更. 【Mini Terminal】参照
 # 2024.01.07 ターミナルに送受信データを表示する機能を追加.
 # 2024.04.30 L2R2ボタンのアナログ値の表示を修正.
+# 2025.01.26 genesis用のRedis入力を追加. POWERとRedisをチェックで動作.
 # 2025.04.06 マイコンボードのwifiIPアドレスをboard_ip.txtで設定するように変更.
 
 # Meridian console 取扱説明書
@@ -75,6 +76,7 @@ import atexit
 import struct
 import os
 import re
+import redis  # Redis用ライブラリ
 
 # ROS搭載マシンの場合はrospyをインポートする
 try:
@@ -95,6 +97,11 @@ MSG_BUFF = MSG_SIZE * 2                     # Meridim配列のバイト長さ
 MSG_ERRS = MSG_SIZE - 2                     # Meridim配列のエラーフラグの格納場所（配列の最後から２番目）
 MSG_CKSM = MSG_SIZE - 1                     # Meridim配列のチェックサムの格納場所（配列の末尾）
 STEP = 94                                   # 1フレームあたりに増加させる制御処理用の数値,サインカーブを何分割するか
+
+# Redisサーバー設定
+REDIS_HOST = "localhost"
+REDIS_PORT = 6379
+REDIS_KEY = "meridis"
 
 # マスターコマンド
 MCMD_TORQUE_ALL_OFF = 0                     # すべてのサーボトルクをオフにする（脱力）
@@ -172,6 +179,7 @@ class MeridianConsole:
         self.flag_ros1 = 0                      # ROS1の起動init（初回のみ）
         self.flag_ros1_pub = 0                  # ROS1のjoint_statesのパブリッシュ
         self.flag_ros1_sub = 0                  # ROS1のjoint_statesのサブスクライブ
+        self.flag_redis_sub = False             # Redisデータのサブスクライブ
         self.flag_set_flow_or_step = 1          # Meridianの循環を+:通常フロー, -:ステップ に切り替え
         self.flag_servo_home = 0                # 全サーボ位置をゼロリセット
         self.flag_stop_flow = False             # ステップモード中の待機フラグ
@@ -309,6 +317,59 @@ UDP_SEND_IP = get_udp_send_ip()
 # [ 0 ]  初期設定
 # ------------------------------------------------------------------------
 mrd = MeridianConsole()  # Meridianデータのインスタンス
+
+
+def redis_sub():
+    """RedisのサブスクライブをON/OFF"""
+    if mrd.flag_redis_sub:
+        print("Stopping Redis subscription.")
+        mrd.flag_redis_sub = False
+    else:
+        print("Starting Redis subscription.")
+        mrd.flag_redis_sub = True
+
+
+def fetch_redis_data():
+    if not mrd.flag_redis_sub:
+        return
+
+    try:
+        r = redis.StrictRedis(
+            host=REDIS_HOST, port=REDIS_PORT, decode_responses=True)
+
+        if not r.exists(REDIS_KEY):
+            print("[Redis Error] Key 'meridis' not found.")
+            return
+
+        data = r.lrange(REDIS_KEY, 0, -1)
+        print(f"[Debug] Raw data from Redis: {data}")  # <== 追加
+
+        if len(data) != 90:
+            print(f"[Redis Error] Expected 90 elements, but got {len(data)}.")
+            return
+
+        try:
+            data = [float(x) for x in data]
+            print(f"[Debug] Converted float data: {data}")  # <== 追加
+        except ValueError:
+            print("[Redis Error] Invalid data format. Could not convert to float.")
+            return
+
+        if mrd.flag_ros1_sub:
+            print("[Debug] Skipping Redis data application due to ROS1 subscription.")
+            return
+
+        for i in range(21, 81, 2):
+            mrd.s_meridim[i] = int(data[i] * 100)
+
+        # <== 追加
+        print(
+            f"[Debug] Updated s_meridim with Redis data: {mrd.s_meridim[21:81:2]}")
+
+    except redis.ConnectionError:
+        print("[Redis Error] Could not connect to Redis server.")
+    except Exception as e:
+        print(f"[Redis Error] Unexpected error: {str(e)}")
 
 
 def meridian_loop():
@@ -548,6 +609,9 @@ def meridian_loop():
                                                             2] = mrd.s_meridim_motion_f[51+i*2]
 
 # ▶︎ 5-1-4 : ④ ユーザーがサーボ位置処理を反映させる場合 → ここで自由にコードを作成
+                    # redisからのデータを仮にここで処理
+                    fetch_redis_data()
+
                     if mrd.flag_python_action:  # コード書式は自由だが, 仮にすべての関節角度に0を代入する場合の例
                         # 頭ヨー
                         mrd.s_meridim_motion_f[21] = mrd.s_meridim_motion_f[21]
@@ -1036,10 +1100,24 @@ def send_data_step_frame():  # チェックボックスに従いアクション�
     # mrd.flag_allow_flow = True
     print("Return: Send data and step to the next frame.")
 
+#
+
+
+def redis_sub(sender, app_data):
+    print(
+        f"[Debug] Redis checkbox clicked. Current flag_redis_sub: {mrd.flag_redis_sub}")
+
+    if mrd.flag_redis_sub:
+        print("[Debug] Stopping Redis subscription.")
+        mrd.flag_redis_sub = False
+    else:
+        print("[Debug] Starting Redis subscription.")
+        mrd.flag_redis_sub = True
 
 # ================================================================================================================
 # ---- dearpyguiによるコンソール画面描写 -----------------------------------------------------------------------------
 # ================================================================================================================
+
 
 def main():
     while (True):
@@ -1140,6 +1218,8 @@ def main():
             dpg.add_text("-> ROS1", pos=[210, 40])
             dpg.add_checkbox(tag="ROS1sub", callback=ros1_sub, pos=[265, 83])
             dpg.add_text("<- ROS1", pos=[210, 83])
+            dpg.add_checkbox(tag="Redis", callback=redis_sub, pos=[270, 104])
+            dpg.add_text("<- Redis", pos=[210, 104])
 
             dpg.add_checkbox(
                 tag="ros1_output_mode", callback=change_ros1_output_mode, user_data=1, pos=[305, 62])
@@ -1316,22 +1396,32 @@ def main():
                     js_meridim.header.stamp = rospy.Time.now()
                     js_meridim.name =\
                         ['c_head_yaw',                      'l_shoulder_pitch',                'l_shoulder_roll',                  'l_elbow_yaw',
-                            'l_elbow_pitch',                 'l_hipjoint_yaw',                  'l_hipjoint_roll',                  'l_hipjoint_pitch',
+                         'l_elbow_pitch',                 'l_hipjoint_yaw',                  'l_hipjoint_roll',                  'l_hipjoint_pitch',
                          'l_knee_pitch',              'l_ankle_pitch',                   'l_ankle_roll',
                          'c_chest_yaw',            'r_shoulder_pitch',                'r_shoulder_roll',                  'r_elbow_yaw',
                          'r_elbow_pitch',     'r_hipjoint_yaw',                  'r_hipjoint_roll',                  'r_hipjoint_pitch',
                          'r_knee_pitch',  'r_ankle_pitch',                   'r_ankle_roll']
                     js_meridim.position = \
-                        [math.radians(mrd.s_meridim_motion_f[21]/100*mrd.jspn[0]), math.radians(mrd.s_meridim_motion_f[23]/100*mrd.jspn[1]), math.radians(mrd.s_meridim_motion_f[25]/100)*mrd.jspn[2], math.radians(mrd.s_meridim_motion_f[27]/100*mrd.jspn[3]),
-                            math.radians(mrd.s_meridim_motion_f[29]/100*mrd.jspn[4]), math.radians(mrd.s_meridim_motion_f[31]/100*mrd.jspn[5]), math.radians(
-                                mrd.s_meridim_motion_f[33]/100*mrd.jspn[6]), math.radians(mrd.s_meridim_motion_f[35]/100*mrd.jspn[7]),
+                        [math.radians(mrd.s_meridim_motion_f[21]/100*mrd.jspn[0]), math.radians(mrd.s_meridim_motion_f[23]/100*mrd.jspn[1]),
+                         math.radians(mrd.s_meridim_motion_f[25]/100)*mrd.jspn[2], math.radians(
+                             mrd.s_meridim_motion_f[27]/100*mrd.jspn[3]),
+                         math.radians(mrd.s_meridim_motion_f[29]/100*mrd.jspn[4]), math.radians(
+                             mrd.s_meridim_motion_f[31]/100*mrd.jspn[5]),
+                         math.radians(mrd.s_meridim_motion_f[33]/100*mrd.jspn[6]), math.radians(
+                             mrd.s_meridim_motion_f[35]/100*mrd.jspn[7]),
                          math.radians(mrd.s_meridim_motion_f[37]/100*mrd.jspn[8]), math.radians(
-                            mrd.s_meridim_motion_f[39]/100*mrd.jspn[9]), math.radians(mrd.s_meridim_motion_f[41]/100*mrd.jspn[10]),
-                         math.radians(mrd.s_meridim_motion_f[51]/100*mrd.jspn[15]), math.radians(mrd.s_meridim_motion_f[53]/100*mrd.jspn[16]), math.radians(
-                            mrd.s_meridim_motion_f[55]/100*mrd.jspn[17]), math.radians(mrd.s_meridim_motion_f[57]/100*mrd.jspn[18]),
-                         math.radians(mrd.s_meridim_motion_f[59]/100*mrd.jspn[19]), math.radians(mrd.s_meridim_motion_f[61]/100*mrd.jspn[20]), math.radians(
-                            mrd.s_meridim_motion_f[63]/100*mrd.jspn[21]), math.radians(mrd.s_meridim_motion_f[65]/100*mrd.jspn[22]),
-                         math.radians(mrd.s_meridim_motion_f[67]/100*mrd.jspn[23]),  math.radians(mrd.s_meridim_motion_f[69]/100*mrd.jspn[24]), math.radians(mrd.s_meridim_motion_f[71]/100*mrd.jspn[25])]
+                             mrd.s_meridim_motion_f[39]/100*mrd.jspn[9]),
+                         math.radians(mrd.s_meridim_motion_f[41]/100*mrd.jspn[10]), math.radians(
+                             mrd.s_meridim_motion_f[51]/100*mrd.jspn[15]),
+                         math.radians(mrd.s_meridim_motion_f[53]/100*mrd.jspn[16]), math.radians(
+                             mrd.s_meridim_motion_f[55]/100*mrd.jspn[17]),
+                         math.radians(mrd.s_meridim_motion_f[57]/100*mrd.jspn[18]), math.radians(
+                             mrd.s_meridim_motion_f[59]/100*mrd.jspn[19]),
+                         math.radians(mrd.s_meridim_motion_f[61]/100*mrd.jspn[20]), math.radians(
+                             mrd.s_meridim_motion_f[63]/100*mrd.jspn[21]),
+                         math.radians(mrd.s_meridim_motion_f[65]/100*mrd.jspn[22]), math.radians(
+                             mrd.s_meridim_motion_f[67]/100*mrd.jspn[23]),
+                         math.radians(mrd.s_meridim_motion_f[69]/100*mrd.jspn[24]), math.radians(mrd.s_meridim_motion_f[71]/100*mrd.jspn[25])]
 
                     js_meridim.velocity = []
                     # js_meridim.velocity = [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]
