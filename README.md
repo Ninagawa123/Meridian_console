@@ -5,8 +5,9 @@ Dearpyguiを使用しており, ROS1の入出力に対応しています.
 Win, Mac, Ubuntuで動作します.  
   
 ## 準備  
-$ pip3 install dearpygui  
-$ pip3 install redis  
+$ pip install numpy  
+$ pip install dearpygui  
+$ pip install redis  
 など, 必要なライブラリをインストールしてください.  
 
 ## 実行  
