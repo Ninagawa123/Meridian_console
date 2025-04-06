@@ -5,7 +5,9 @@ Dearpyguiを使用しており, ROS1の入出力に対応しています.
 Win, Mac, Ubuntuで動作します.  
   
 ## 準備  
-$ pip3 install dearpygui など, 必要なライブラリをインストールしてください.  
+$ pip3 install dearpygui  
+$ pip3 install redis  
+など, 必要なライブラリをインストールしてください.  
 
 ## 実行  
 $ CD ~/(Meridian_console.pyのあるディレクトリ)  
