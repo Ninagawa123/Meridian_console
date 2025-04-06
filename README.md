@@ -16,14 +16,21 @@ Win, Mac, Ubuntuで動作します.
 - Meridian専用Board (必要に応じて)  
   
 ## 準備  
+
+```  
 $ pip install numpy  
 $ pip install dearpygui  
 $ pip install redis  
+```  
+
 など, 必要なライブラリをインストールしてください.  
   
 ## 実行方法  
+  
+```  
 $ CD ~/(Meridian_console.pyのあるディレクトリ)  
 $ python Meridian_console.py [送信先のESP32のIPアドレス 例:192.168.1.17]  
+```  
   
 ※送信先のIPアドレスを記入しない場合, board_ip.txtで設定された値で接続を試みます.    
 ※IPアドレス情報が見つからない場合は, ターミナルで入力を促されます. 内容はboard_ip.txtに保存されます.  
