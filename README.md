@@ -2,7 +2,7 @@
 Meridian_consoleは, ロボットのリアルタイムなデジタルツイン化を実現する"Meridian"システムの一部です.  
 ESP32等のwifi付きマイコンボードとペアで使用することで, ロボットの状態情報をデバイス間で100Hzの頻度で共有することができます.  
 
-<img width="800" alt="console_meridianflow_20250406.png" src="images/console_meridianflow_20250406.png">
+<img src="images/console_meridianflow_20250406.png" width="800" alt="console_meridianflow_20250406.png">
 
 このPythonコードをPCで実行することで, PC側で受け取った情報を表示したり, コマンドを送信することができます.  
 現在, ROS1の入出力およびredisの読み取りに対応しています.  
