@@ -1124,7 +1124,8 @@ def main():
 
         # dpg描画処理1 ==========================================================
         dpg.create_context()
-        dpg.create_viewport(title=TITLE_VERSION, width=853, height=540)
+        # dpg.create_viewport(title=TITLE_VERSION, width=853, height=540) #mac/ubuntu
+        dpg.create_viewport(title=TITLE_VERSION, width=870, height=580) #win
 
 # ------------------------------------------------------------------------
 # [ Axis Monitor ] : サーボ位置モニタリング用のウィンドウ（表示位置:上段/左側）
