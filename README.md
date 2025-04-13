@@ -46,7 +46,7 @@ $ python Meridian_console.py [送信先のESP32のIPアドレス 例:192.168.1.1
   
 ## 画面の解説  
   
-<img src="image/console_img_20250406..png" width="851" alt="console_img_20250406..png">  
+<img src="image/console_img_20250406..png" width="851" alt="console_img_20250406.png">  
   
 #### Axis Monitor  
 受信したサーボの角度を表示します.  
