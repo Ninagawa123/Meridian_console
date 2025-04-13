@@ -37,7 +37,7 @@ $ python Meridian_console.py [送信先のESP32のIPアドレス 例:192.168.1.1
   
 Windowsの場合, Meridian_console.pyの起動時に通信を許可するかどうかのダイアログボックスが出ることがあります. 許可とすることで実行が可能ですが, 実行できない場合は下記の設定を行なってください.  
 
-<details open>
+<details close>
 <summary>WindowsでFirewallの設定が必要な場合</summary>
   1. Windowsの検索バーに「ファイアウォールとネットワーク保護」と入力し, ファイアウォールの設定を開きます.<br>
   2. 下側にあるメニューから「詳細設定」をクリックします.<br>
