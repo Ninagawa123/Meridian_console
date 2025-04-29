@@ -321,6 +321,7 @@ def close_trim_window():  # Trim Setting ウィンドウを閉じるコールバ
     dpg.delete_item("Trim Setting")
     print("Closed Trim Setting window.")
 
+
 # Power状態を連動させるコールバック関数（Trim Setting側）
 def sync_power_from_trim(sender, app_data, user_data):
     # Trim Setting側のPowerチェックボックスが変更されたとき
@@ -328,6 +329,32 @@ def sync_power_from_trim(sender, app_data, user_data):
     dpg.set_value("Power", app_data)
     # 元のPowerチェックボックスのコールバックを呼び出し
     set_servo_power("Power", app_data, None)
+
+
+# 連動させるコールバック関数（Trim Setting側）
+def sync_python_from_trim(sender, app_data, user_data):
+    # Trim Setting側のPythonチェックボックスが変更されたとき
+    # Command側のPythonチェックボックスも同期させる
+    dpg.set_value("python", app_data)
+    # 元のPythonチェックボックスのコールバックを呼び出し
+    set_python_action("python", app_data, None)
+
+
+def sync_enable_from_trim(sender, app_data, user_data):
+    # Trim Setting側のEnableチェックボックスが変更されたとき
+    # Command側のEnableチェックボックスも同期させる
+    dpg.set_value("Enable", app_data)
+    # 元のEnableチェックボックスのコールバックを呼び出し
+    set_enable("Enable", app_data, None)
+
+
+# Trim Setting側のスライダーが動いた時のコールバック
+def set_servo_angle_from_trim(channel, app_data):
+    servo_id = channel.replace("Trim_", "ID ")
+    dpg.set_value(servo_id, app_data)  # Axis Monitor側のスライダーを更新
+    
+    # 元の関数を呼び出してサーボ角度を設定
+    set_servo_angle(servo_id, app_data)
     
 
 # Trim Setting ウィンドウを作成する関数
@@ -335,37 +362,65 @@ def create_trim_window():
     # ビューポートのサイズを取得して、ウィンドウサイズを決定
     viewport_width = dpg.get_viewport_width()
     viewport_height = dpg.get_viewport_height()
-
-    with dpg.window(label="Trim Setting", tag="Trim Setting",
-                    width=viewport_width-20, height=viewport_height-20,
-                    pos=[10, 10], on_close=close_trim_window):
-
+    
+    with dpg.window(label="Trim Setting", tag="Trim Setting", 
+                   width=viewport_width-20, height=viewport_height-20, 
+                   pos=[10, 10], on_close=close_trim_window):
+        
         # ここにトリム設定用のUIコンポーネントを追加
         dpg.add_text("Servo Trim Settings", pos=[viewport_width//2-80, 30])
-
-        # Powerチェックボックスを追加（Command側と連動）
-        # Command側のPowerチェックボックスの状態を取得して初期値に設定
+        
+        # コントロールエリア
+        # Command側のチェックボックスの状態を取得して初期値に設定
         power_state = dpg.get_value("Power")
-        dpg.add_checkbox(label="Power", tag="Power_Trim",
-                         callback=sync_power_from_trim,
-                         default_value=power_state,
-                         pos=[viewport_width//2-80, 60])
-
+        python_state = dpg.get_value("python")
+        enable_state = dpg.get_value("Enable")
+        
+        # Powerチェックボックス
+        dpg.add_checkbox(label="Power", tag="Power_Trim", 
+                        callback=sync_power_from_trim, 
+                        default_value=power_state, 
+                        pos=[viewport_width//2-150, 60])
+        
+        # Pythonチェックボックス
+        dpg.add_checkbox(label="Python", tag="Python_Trim", 
+                        callback=sync_python_from_trim, 
+                        default_value=python_state, 
+                        pos=[viewport_width//2-50, 60])
+        
+        # Enableチェックボックス
+        dpg.add_checkbox(label="Enable", tag="Enable_Trim", 
+                        callback=sync_enable_from_trim, 
+                        default_value=enable_state, 
+                        pos=[viewport_width//2+50, 60])
+        
+        # Homeボタンを追加（Axis Monitorと同じ機能）
+        dpg.add_button(label="Home", callback=set_servo_home, 
+                      pos=[viewport_width//2+150, 60], width=40)
+        
         # 左側のサーボのトリム設定
         dpg.add_text("Left Side Servos", pos=[viewport_width//4-60, 90])
         for i in range(0, 15, 1):
-            dpg.add_slider_int(default_value=0, tag="Trim_L"+str(i), label="L"+str(i),
-                               max_value=100, min_value=-100, pos=[viewport_width//4-100, 120+i*25], width=200)
-
+            # Axis Monitorの現在値を取得して初期値に設定
+            current_value = dpg.get_value(f"ID L{i}")
+            dpg.add_slider_float(default_value=current_value, tag=f"Trim_L{i}", label=f"L{i}", 
+                              max_value=100, min_value=-100, 
+                              pos=[viewport_width//4-100, 120+i*25], width=200,
+                              callback=set_servo_angle_from_trim)
+        
         # 右側のサーボのトリム設定
         dpg.add_text("Right Side Servos", pos=[viewport_width*3//4-60, 90])
         for i in range(0, 15, 1):
-            dpg.add_slider_int(default_value=0, tag="Trim_R"+str(i), label="R"+str(i),
-                               max_value=100, min_value=-100, pos=[viewport_width*3//4-100, 120+i*25], width=200)
-
+            # Axis Monitorの現在値を取得して初期値に設定
+            current_value = dpg.get_value(f"ID R{i}")
+            dpg.add_slider_float(default_value=current_value, tag=f"Trim_R{i}", label=f"R{i}", 
+                              max_value=100, min_value=-100, 
+                              pos=[viewport_width*3//4-100, 120+i*25], width=200,
+                              callback=set_servo_angle_from_trim)
+        
         # 閉じるボタンを最下部に配置
-        dpg.add_button(label="Close", callback=close_trim_window,
-                       width=100, pos=[viewport_width//2-50, viewport_height-60])
+        dpg.add_button(label="Close", callback=close_trim_window, 
+                      width=100, pos=[viewport_width//2-50, viewport_height-60])
 
 
 UDP_SEND_IP_DEF = load_udp_send_ip()        # 送信先のESP32のIPアドレス 21
@@ -886,9 +941,8 @@ def meridian_loop():
 def cleanup():
     print("Meridan_console quited.")
 
+
 # フラグ切り替え用の真偽反転
-
-
 def flip_number(appdata, string1, string2):
     if appdata == True:
         print(string1)
@@ -897,29 +951,35 @@ def flip_number(appdata, string1, string2):
         print(string2)
         return False
 
+
 # 押しボタンでフラグを立てる
-
-
 def push_button_flag(string):
     print(string)
     return 1
 
+
 # [Axis Monitor] ウィンドウのスライダー処理
-
-
 def set_servo_angle(channel, app_data):
     if channel[3] == "L":
         mrd.s_meridim[int(channel[4:6])*2+21] = int(app_data * 100)
         mrd.s_meridim_motion_f[int(channel[4:6])*2+21] = app_data
         print(f"L{channel[4:6]}[{int(channel[4:6])*2+21}]:{int(app_data*100)}")
+
+        # Trim Settingウィンドウが開かれている場合は、対応するスライダーを更新
+        if mrd.flag_trim_window_open and dpg.does_item_exist(f"Trim_L{channel[4:6]}"):
+            dpg.set_value(f"Trim_L{channel[4:6]}", app_data)
+
     if channel[3] == "R":
         mrd.s_meridim[int(channel[4:6])*2+51] = int(app_data * 100)
         mrd.s_meridim_motion_f[int(channel[4:6])*2+51] = app_data
         print(f"R{channel[4:6]}[{int(channel[4:6])*2+51}]:{int(app_data*100)}")
 
+        # Trim Settingウィンドウが開かれている場合は、対応するスライダーを更新
+        if mrd.flag_trim_window_open and dpg.does_item_exist(f"Trim_R{channel[4:6]}"):
+            dpg.set_value(f"Trim_R{channel[4:6]}", app_data)
+
+
 # [Axis Monitor] ウィンドウのTarget, Actual 切り替えラジオボタン処理
-
-
 def change_display_mode(sender, app_data, user_data):
     chosen_option = dpg.get_value(sender)
     if chosen_option == "Target":
@@ -929,15 +989,13 @@ def change_display_mode(sender, app_data, user_data):
         mrd.flag_display_mode = 0
         print("Actual mode selected")
 
+
 # [Axis Monitor] ウィンドウのhomeボタン処理
-
-
 def set_servo_home():
     mrd.flag_servo_home = push_button_flag("Set all servo position zero.")
 
+
 # [Message] ウィンドウの送信データ表示処理
-
-
 def set_disp_send():
     if mrd.flag_disp_send == 0:
         mrd.flag_disp_send = 2
@@ -946,9 +1004,8 @@ def set_disp_send():
         mrd.flag_disp_send = 0
         print("Stop to display send meridim data.")
 
+
 # [Message] ウィンドウの受信データ表示処理
-
-
 def set_disp_rcvd():
     if mrd.flag_disp_rcvd == 0:
         mrd.flag_disp_rcvd = 2
@@ -957,15 +1014,13 @@ def set_disp_rcvd():
         mrd.flag_disp_rcvd = 0
         print("Stop to display received meridim data.")
 
+
 # [Message] ウィンドウの reset cycle ボタン処理
-
-
 def reset_cycle():  # カウンターのリセット
     mrd.frag_reset_cycle = True
 
+
 # [Message] ウィンドウの reset counter ボタン処理
-
-
 def reset_counter():  # カウンターのリセット
     mrd.loop_count = 1
     mrd.error_count_pc_to_esp = 0
@@ -980,9 +1035,8 @@ def reset_counter():  # カウンターのリセット
     mrd.error_servo_id = "None"
     mrd.start = time.time()
 
+
 # [Button Input] ウィンドウ のリモコンボタン処理
-
-
 def pad_btn_panel_on(sender, app_data, user_data):
     mrd.pad_button_panel_short
     if (mrd.pad_button_panel_short[0] & user_data) == 0:
@@ -992,24 +1046,13 @@ def pad_btn_panel_on(sender, app_data, user_data):
         mrd.pad_button_panel_short[0] = mrd.pad_button_panel_short[0] ^ user_data
         print(f'Btn:{mrd.pad_button_panel_short[0]}')
 
+
 # [sensor monitor] ウィンドウのSetYawボタン処理
-
-
 def set_yaw_center():  # IMUのヨー軸センターリセットフラグをcommand_send_trial回上げる（コマンドをcommand_send_trial回送信する）
     mrd.flag_update_yaw = mrd.command_send_trial
 
+
 # [command] ウィンドウのPowerフラグ処理（サーボのオンオフ）
-
-
-# def set_servo_power(sender, app_data, user_data):
-#     if app_data:
-#         mrd.flag_servo_power = 2
-#         print("Servo Power ON")
-#     else:
-#         mrd.flag_servo_power = -1
-#         print("Servo Power OFF")
-
-# [command] ウィンドウのPowerフラグ処理（サーボのオンオフ）の修正版
 def set_servo_power(sender, app_data, user_data):
     if app_data:
         mrd.flag_servo_power = 2
@@ -1017,32 +1060,44 @@ def set_servo_power(sender, app_data, user_data):
     else:
         mrd.flag_servo_power = -1
         print("Servo Power OFF")
-    
+
     # Trim Settingウィンドウが開かれている場合は、そちらのPowerチェックボックスも更新
     if mrd.flag_trim_window_open and dpg.does_item_exist("Power_Trim"):
         dpg.set_value("Power_Trim", app_data)
-        
+
+
 # [command] ウィンドウのDemoフラグ処理
 def set_demo_action(sender, app_data, user_data):  # チェックボックスに従いアクション送信フラグをオンオフ
     #    mrd.flag_demo_action=flip_number(mrd.flag_demo_action,"Start DEMO motion data streaming.","Quit DEMO motion data streaming.")
     mrd.flag_demo_action = flip_number(
         app_data, "Start DEMO motion data streaming.", "Quit DEMO motion data streaming.")
 
+
 # [command] ウィンドウのPythonフラグ処理
-def set_python_action(sender, app_data, user_data):  # チェックボックスに従いアクション送信フラグをオンオフ
-    #    mrd.flag_python_action=flip_number(mrd.flag_python_action,"Start python motion data streaming.","Quit python motion data streaming.")
+def set_python_action(sender, app_data, user_data):
     mrd.flag_python_action = flip_number(
         app_data, "Start python motion data streaming.", "Quit python motion data streaming.")
 
+    # Trim Settingウィンドウが開かれている場合は、そちらのPythonチェックボックスも更新
+    if mrd.flag_trim_window_open and dpg.does_item_exist("Python_Trim"):
+        dpg.set_value("Python_Trim", app_data)
+
+
 # [command] ウィンドウのEnableフラグ処理
-def set_enable(sender, app_data, user_data):  # チェックボックスに従いデータ送信フラグをオンオフ
+def set_enable(sender, app_data, user_data):
     mrd.flag_enable_send_made_data = flip_number(
         app_data, "Start sending data to ESP32.", "Quit sending data to ESP32.")
+
+    # Trim Settingウィンドウが開かれている場合は、そちらのEnableチェックボックスも更新
+    if mrd.flag_trim_window_open and dpg.does_item_exist("Enable_Trim"):
+        dpg.set_value("Enable_Trim", app_data)
+
 
 # [command] ウィンドウのROS1データ送信モードをtarget/actualに切り替え
 def change_ros1_output_mode(sender, app_data, user_data):
     mrd.flag_ros1_output_mode = flip_number(
         app_data, "Set target data(send data) as ROS1 publish.", "Set actual data(received data) as ROS1 publish.")
+
 
 # [command] ウィンドウのROS1パブリッシュをオンオフ
 def ros1_pub():
@@ -1053,9 +1108,8 @@ def ros1_pub():
         mrd.flag_ros1_pub = 0
         print("Quit publishing ROS1 joint_states.")
 
+
 # [command] ウィンドウのROS1サブスクライブをオンオフ
-
-
 def ros1_sub():
     if mrd.flag_ros1_sub == 0:
         mrd.flag_ros1_sub = 1
@@ -1064,9 +1118,8 @@ def ros1_sub():
         mrd.flag_ros1_sub = 0
         print("Quit publishing ROS1 joint_states.")
 
+
 # [command] ウィンドウのROS1データ変換
-
-
 def joinstate_to_meridim(JointState):
     for i in range(11):
         mrd.s_meridim_js_sub_f[21+i * 2] = round(
@@ -1074,9 +1127,8 @@ def joinstate_to_meridim(JointState):
         mrd.s_meridim_js_sub_f[51+i * 2] = round(
             math.degrees(JointState.position[11+i])*100)*mrd.jspn[15+i]
 
+
 # [Mini Terminal] ウィンドウのsetボタン処理
-
-
 def set_miniterminal_data():  # ミニターミナルのセットボタンが押下されたら送信データをセットする
     print_string = ""
     for i in range(8):
@@ -1102,9 +1154,8 @@ def set_miniterminal_data():  # ミニターミナルのセットボタンが押
     print("Set mini tarminal data : ")
     print(print_string[:-2])  # 末尾のカンマ以外を表示
 
+
 # [Mini Terminal] ウィンドウのSendボタン処理
-
-
 def set_tarminal_continuous_on(sender, app_data):  # ボタン押下でset_flowフラグをオン
     if app_data:
         mrd.flag_tarminal_mode_send = 2
@@ -1118,9 +1169,8 @@ def set_tarminal_continuous_on(sender, app_data):  # ボタン押下でset_flow�
             # 該当しないデータにはインデックスに-1を指定して送信データに反映されないようにしておく
             mrd.s_minitermnal_keep[i][1] = 0
 
+
 # [Mini Terminal] ウィンドウのSendボタン処理
-
-
 def set_tarminal_send_on():  # ボタン押下でset_flowフラグをオン
     if mrd.flag_tarminal_mode_send == 0:
         mrd.flag_tarminal_mode_send = 2
@@ -1134,17 +1184,15 @@ def set_tarminal_send_on():  # ボタン押下でset_flowフラグをオン
             # 該当しないデータにはインデックスに-1を指定して送信データに反映されないようにしておく
             mrd.s_minitermnal_keep[i][1] = 0
 
+
 # [Mini Terminal] ウィンドウのset&sendボタン処理
-
-
 def set_and_send_miniterminal_data():  # ミニターミナルのセットボタンが押下されたら送信データをセットする
     set_miniterminal_data()
     set_tarminal_send_on()
     mrd.flag_send_miniterminal_data_once = 1    # ミニターミナルの値を1回送信する
 
+
 # [Mini Terminal] ウィンドウのFlow, Step 切り替えラジオボタン処理
-
-
 def set_transaction_mode(sender, app_data):
     if app_data == "Flow":  # ボタン押下でset_flowフラグをオン
         mrd.flag_set_flow_or_step = 2
@@ -1157,17 +1205,15 @@ def set_transaction_mode(sender, app_data):
         mrd.flag_stop_flow = True
         print("Set step to Meridian.")
 
+
 # [Mini Terminal] ウィンドウの Next frame ボタン処理
-
-
 def send_data_step_frame():  # チェックボックスに従いアクション送信フラグをオンオフ
     mrd.flag_stop_flow = False
     # mrd.flag_allow_flow = True
     print("Return: Send data and step to the next frame.")
 
+
 #
-
-
 def redis_sub(sender, app_data):
     print(
         f"[Debug] Redis checkbox clicked. Current flag_redis_sub: {mrd.flag_redis_sub}")
@@ -1219,11 +1265,11 @@ def main():
                     dpg.add_slider_float(default_value=0, tag="ID L"+str(i), label="L"+str(
                         i), max_value=100, min_value=-100, callback=set_servo_angle, pos=[135, 35+i*20], width=80)
             dpg.add_button(label="Home", callback=set_servo_home, pos=[
-                10, 340], width=60)  # Homeボタンの幅を指定
+                10, 340], width=40)  # Homeボタンの幅を指定
             dpg.add_button(label="Trim", callback=open_trim_window, pos=[
-                80, 340], width=60)  # Trimボタンを追加
+                55, 340], width=40)  # Trimボタンを追加
             dpg.add_radio_button(label="display_mode", items=[
-                "Target", "Actual"], callback=change_display_mode, default_value="Actual", pos=[150, 340], horizontal=True)
+                "Target", "Actual"], callback=change_display_mode, default_value="Actual", pos=[100, 340], horizontal=True)
 
 
 # ------------------------------------------------------------------------
