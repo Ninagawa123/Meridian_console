@@ -113,6 +113,8 @@ MCMD_CLEAR_SERVO_ERROR_ID = 10004           # 通信エラーのサーボのID�
 MCMD_BOARD_TRANSMIT_ACTIVE = 10005          # ボードが定刻で送信を行うモード（デフォルト設定.PC側が受信待ち）
 MCMD_BOARD_TRANSMIT_PASSIVE = 10006         # ボードが受信を待ち返信するモード（PC側が定刻送信）
 MCMD_RESET_MRD_TIMER = 10007                # フレーム管理時計mrd_t_milを現在時刻にリセット
+MCMD_EEPROM_SAVE_TRIM = 10101               # 現在の姿勢をトリム値としてサーボに書き込む
+MCMD_EEPROM_LOAD_TRIM = 10102               # EEPROMのトリム値をサーボに反映する
 
 # ================================================================================================================
 # ---- 変数の宣言 -------------------------------------------------------------------------------------------------
@@ -354,10 +356,10 @@ def sync_enable_from_trim(sender, app_data, user_data):
 def set_servo_angle_from_trim(channel, app_data):
     servo_id = channel.replace("Trim_", "ID ")
     dpg.set_value(servo_id, app_data)  # Axis Monitor側のスライダーを更新
-    
+
     # 元の関数を呼び出してサーボ角度を設定
     set_servo_angle(servo_id, app_data)
-    
+
 
 # インプットフィールドの値をスライダーに適用するコールバック関数
 def apply_input_value(sender, app_data, user_data):
@@ -394,7 +396,7 @@ def apply_input_value(sender, app_data, user_data):
         # 数値以外が入力された場合は何もしない
         dpg.set_value(input_tag, "")
         print(f"Invalid input for servo {servo_id}. Please enter a number.")
-        
+
 
 # トリム用インプットフィールドの値をスライダーに適用するコールバック関数
 def apply_trim_input_value(sender, app_data, user_data):
@@ -439,12 +441,12 @@ def apply_trim_input_value(sender, app_data, user_data):
 
 # EEPROMへの保存コールバック関数
 def save_to_eeprom():
-    # Meridimのマスターコマンド10101を送信するための処理
+    # MeridimのマスターコマンドMCMD_EEPROM_SAVE_TRIM(10101)を送信するための処理
     print("Sending command to save to EEPROM...")
 
     # Mini Terminalのデータをセットする処理（1つめのスロットにマスターコマンドをセット）
     dpg.set_value("s_index0", "0")  # インデックス0（マスターコマンド）
-    dpg.set_value("s_data0", "10101")  # マスターコマンド値10101
+    dpg.set_value("s_data0", MCMD_EEPROM_SAVE_TRIM)  # マスターコマンド値10101
 
     # データをセットしてから送信
     set_miniterminal_data()
@@ -458,16 +460,16 @@ def save_to_eeprom():
 def load_from_eeprom():
     # Meridimのマスターコマンド10102を送信するための処理
     print("Sending command to load from EEPROM...")
-    
+
     # Mini Terminalのデータをセットする処理（1つめのスロットにマスターコマンドをセット）
     dpg.set_value("s_index0", "0")  # インデックス0（マスターコマンド）
-    dpg.set_value("s_data0", "10102")  # マスターコマンド値10102
-    
+    dpg.set_value("s_data0", MCMD_EEPROM_LOAD_TRIM)  # マスターコマンド値10102
+
     # データをセットしてから送信
     set_miniterminal_data()
     set_tarminal_send_on()
     mrd.flag_send_miniterminal_data_once = 1    # ミニターミナルの値を1回送信する
-    
+
     print("Command sent: Load from EEPROM (10102)")
 
 
@@ -476,95 +478,99 @@ def create_trim_window():
     # ビューポートのサイズを取得して、ウィンドウサイズを決定
     viewport_width = dpg.get_viewport_width()
     viewport_height = dpg.get_viewport_height()
-    
-    with dpg.window(label="Trim Setting", tag="Trim Setting", 
-                   width=viewport_width-20, height=viewport_height-20, 
-                   pos=[10, 10], on_close=close_trim_window):
-        
-        # ここにトリム設定用のUIコンポーネントを追加
-        dpg.add_text("Servo Trim Settings", pos=[viewport_width//2-80, 30])
-        
+
+    with dpg.window(label="Trim Setting", tag="Trim Setting",
+                    width=viewport_width-20, height=viewport_height-20,
+                    pos=[10, 10], on_close=close_trim_window):
+
+        # トリム設定用のUIコンポーネントを追加
+        #dpg.add_text("Servo Trim Settings", pos=[viewport_width//2-80, 30])
+
         # コントロールエリア
         # Command側のチェックボックスの状態を取得して初期値に設定
         power_state = dpg.get_value("Power")
         python_state = dpg.get_value("python")
         enable_state = dpg.get_value("Enable")
-        
-        # Powerチェックボックス
-        dpg.add_checkbox(label="Power", tag="Power_Trim", 
-                        callback=sync_power_from_trim, 
-                        default_value=power_state, 
-                        pos=[viewport_width//2-150, 60])
-        
-        # Pythonチェックボックス
-        dpg.add_checkbox(label="Python", tag="Python_Trim", 
-                        callback=sync_python_from_trim, 
-                        default_value=python_state, 
-                        pos=[viewport_width//2-50, 60])
-        
-        # Enableチェックボックス
-        dpg.add_checkbox(label="Enable", tag="Enable_Trim", 
-                        callback=sync_enable_from_trim, 
-                        default_value=enable_state, 
-                        pos=[viewport_width//2+50, 60])
-        
+
         # Homeボタンを追加（Axis Monitorと同じ機能）
         dpg.add_button(label="Home", callback=set_servo_home,
-                      pos=[viewport_width//2-318, 60], width=40)
-        
+                       pos=[viewport_width//2-318, 40], width=40)
+
+        # Powerチェックボックス
+        dpg.add_checkbox(label="Power", tag="Power_Trim",
+                         callback=sync_power_from_trim,
+                         default_value=power_state,
+                         pos=[viewport_width//2-250, 40])
+
+        # Pythonチェックボックス
+        dpg.add_checkbox(label="Python", tag="Python_Trim",
+                         callback=sync_python_from_trim,
+                         default_value=python_state,
+                         pos=[viewport_width//2-170, 40])
+
+        # Enableチェックボックス
+        dpg.add_checkbox(label="Enable", tag="Enable_Trim",
+                         callback=sync_enable_from_trim,
+                         default_value=enable_state,
+                         pos=[viewport_width//2-90, 40])
+
         # EEPROMボタンを追加
         dpg.add_button(label="Save to EEPROM", callback=save_to_eeprom,
-                      pos=[viewport_width//2+200, 45], width=120)
+                       pos=[viewport_width//2+45, 40], width=125)
+        
         dpg.add_button(label="Load from EEPROM", callback=load_from_eeprom,
-                      pos=[viewport_width//2+200, 70], width=120)
-        
-        # 左側のサーボのトリム設定
-        dpg.add_text("Left Side Servos", pos=[viewport_width//4-60, 90])
-        for i in range(0, 15, 1):
-            # Axis Monitorの現在値を取得して初期値に設定
-            current_value = dpg.get_value(f"ID L{i}")
-            
-            # スライダー
-            dpg.add_slider_float(default_value=current_value, tag=f"Trim_L{i}", label=f"L{i}", 
-                              max_value=100, min_value=-100, 
-                              pos=[viewport_width//4-100, 120+i*25], width=160,
-                              callback=set_servo_angle_from_trim)
-            
-            # インプットフィールド
-            dpg.add_input_text(tag=f"Input_Trim_L{i}", decimal=True, width=50, 
-                             pos=[viewport_width//4+65, 120+i*25])
-            
-            # エンターボタン
-            dpg.add_button(label="Enter", tag=f"Enter_Trim_L{i}", 
-                         callback=apply_trim_input_value, user_data=f"L{i}", 
-                         width=42, pos=[viewport_width//4+120, 120+i*25])
-        
+                       pos=[viewport_width//2+183, 40], width=125)
+
+
         # 右側のサーボのトリム設定
-        dpg.add_text("Right Side Servos", pos=[viewport_width*3//4-60, 90])
+        dpg.add_text("Right Side Servos", pos=[viewport_width//4-75, 90])
+
         for i in range(0, 15, 1):
             # Axis Monitorの現在値を取得して初期値に設定
             current_value = dpg.get_value(f"ID R{i}")
-            
-            # スライダー
-            dpg.add_slider_float(default_value=current_value, tag=f"Trim_R{i}", label=f"R{i}", 
-                              max_value=100, min_value=-100, 
-                              pos=[viewport_width*3//4-100, 120+i*25], width=160,
-                              callback=set_servo_angle_from_trim)
-            
-            # インプットフィールド
-            dpg.add_input_text(tag=f"Input_Trim_R{i}", decimal=True, width=50, 
-                             pos=[viewport_width*3//4+65, 120+i*25])
-            
-            # エンターボタン
-            dpg.add_button(label="Enter", tag=f"Enter_Trim_R{i}", 
-                         callback=apply_trim_input_value, user_data=f"R{i}", 
-                         width=42, pos=[viewport_width*3//4+120, 120+i*25])
-        
-        # 閉じるボタンを最下部に配置
-        dpg.add_button(label="Close", callback=close_trim_window, 
-                      width=100, pos=[viewport_width//2-50, viewport_height-60])
-        
 
+            # スライダー
+            dpg.add_slider_float(default_value=current_value, tag=f"Trim_R{i}", label=f"R{i}",
+                                 max_value=100, min_value=-100,
+                                 pos=[viewport_width//4-100, 120+i*25], width=160,
+                                 callback=set_servo_angle_from_trim)
+
+            # インプットフィールド
+            dpg.add_input_text(tag=f"Input_Trim_R{i}", decimal=True, width=50,
+                               pos=[viewport_width//4+65, 120+i*25])
+
+            # エンターボタン
+            dpg.add_button(label="Enter", tag=f"Enter_Trim_R{i}",
+                           callback=apply_trim_input_value, user_data=f"R{i}",
+                           width=42, pos=[viewport_width//4+120, 120+i*25])
+
+
+        # 左側のサーボのトリム設定
+        dpg.add_text("Left Side Servos", pos=[viewport_width*6//9-75, 90])
+        for i in range(0, 15, 1):
+            # Axis Monitorの現在値を取得して初期値に設定
+            current_value = dpg.get_value(f"ID L{i}")
+
+            # スライダー
+            dpg.add_slider_float(default_value=current_value, tag=f"Trim_L{i}", label=f"L{i}",
+                                 max_value=100, min_value=-100,
+                                 pos=[viewport_width*6//9-100, 120+i*25], width=160,
+                                 callback=set_servo_angle_from_trim)
+
+            # インプットフィールド
+            dpg.add_input_text(tag=f"Input_Trim_L{i}", decimal=True, width=50,
+                               pos=[viewport_width*6//9+65, 120+i*25])
+
+            # エンターボタン
+            dpg.add_button(label="Enter", tag=f"Enter_Trim_L{i}",
+                           callback=apply_trim_input_value, user_data=f"L{i}",
+                           width=42, pos=[viewport_width*6//9+120, 120+i*25])
+            
+        # 閉じるボタンを最下部に配置
+        dpg.add_button(label="Close", callback=close_trim_window,
+                       width=100, pos=[viewport_width//2-50, viewport_height-60])
+        
+                    
 UDP_SEND_IP_DEF = load_udp_send_ip()        # 送信先のESP32のIPアドレス 21
 UDP_SEND_IP = get_udp_send_ip()
 
@@ -1135,20 +1141,21 @@ def change_display_mode(sender, app_data, user_data):
 # [Axis Monitor] ウィンドウのhomeボタン処理
 def set_servo_home():
     mrd.flag_servo_home = push_button_flag("Set all servo position zero.")
-    
+
     # スライダーの値も0にリセット
     for i in range(15):
         # Axis Monitorのスライダーをリセット
         dpg.set_value(f"ID L{i}", 0)
         dpg.set_value(f"ID R{i}", 0)
-        
+
         # Trim Settingウィンドウが開いている場合は、そのスライダーも更新
         if mrd.flag_trim_window_open:
             if dpg.does_item_exist(f"Trim_L{i}"):
                 dpg.set_value(f"Trim_L{i}", 0)
             if dpg.does_item_exist(f"Trim_R{i}"):
                 dpg.set_value(f"Trim_R{i}", 0)
-                
+
+
 # [Message] ウィンドウの送信データ表示処理
 def set_disp_send():
     if mrd.flag_disp_send == 0:
@@ -1395,93 +1402,27 @@ def main():
 # ------------------------------------------------------------------------
 # [ Axis Monitor ] : サーボ位置モニタリング用のウィンドウ（表示位置:上段/左側）
 # ------------------------------------------------------------------------
-        # with dpg.window(label="Axis Monitor", width=250, height=370, pos=[5, 5]):
-        #     with dpg.group(label='RightSide'):
-        #         for i in range(0, 15, 1):
-        #             dpg.add_slider_float(default_value=0, tag="ID R"+str(i), label="R"+str(
-        #                 i), max_value=100, min_value=-100, callback=set_servo_angle, pos=[10, 35+i*20], width=80)
-        #     with dpg.group(label='LeftSide'):
-        #         for i in range(0, 15, 1):
-        #             dpg.add_slider_float(default_value=0, tag="ID L"+str(i), label="L"+str(
-        #                 i), max_value=100, min_value=-100, callback=set_servo_angle, pos=[135, 35+i*20], width=80)
-        #     dpg.add_button(label="Home", callback=set_servo_home, pos=[
-        #                    10, 340])  # Sendと書いてあるボタンをwindowの右下に設置
-        #     dpg.add_radio_button(label="display_mode", items=[
-        #                          "Target", "Actual"], callback=change_display_mode, default_value="Actual", pos=[90, 340], horizontal=True)
-
         # [ Axis Monitor ] : サーボ位置モニタリング用のウィンドウ（表示位置:上段/左側）
         with dpg.window(label="Axis Monitor", width=250, height=370, pos=[5, 5]):
             with dpg.group(label='RightSide'):
                 for i in range(0, 15, 1):
-                    dpg.add_slider_float(default_value=0, tag="ID R"+str(i), label="R"+str(i), 
-                                        max_value=100, min_value=-100, callback=set_servo_angle, 
-                                        pos=[10, 35+i*20], width=80)
-            
+                    dpg.add_slider_float(default_value=0, tag="ID R"+str(i), label="R"+str(i),
+                                         max_value=100, min_value=-100, callback=set_servo_angle,
+                                         pos=[10, 35+i*20], width=80)
+
             with dpg.group(label='LeftSide'):
                 for i in range(0, 15, 1):
-                    dpg.add_slider_float(default_value=0, tag="ID L"+str(i), label="L"+str(i), 
-                                        max_value=100, min_value=-100, callback=set_servo_angle, 
-                                        pos=[135, 35+i*20], width=80)
-            
+                    dpg.add_slider_float(default_value=0, tag="ID L"+str(i), label="L"+str(i),
+                                         max_value=100, min_value=-100, callback=set_servo_angle,
+                                         pos=[135, 35+i*20], width=80)
+
             dpg.add_button(label="Home", callback=set_servo_home, pos=[
-                        10, 340], width=40)
+                10, 340], width=40)
             dpg.add_button(label="Trim", callback=open_trim_window, pos=[
-                        55, 340], width=40)
+                55, 340], width=40)
             dpg.add_radio_button(label="display_mode", items=[
-                                "Target", "Actual"], callback=change_display_mode, 
-                                default_value="Actual", pos=[100, 340], horizontal=True)
-    
-    
-        # # [ Axis Monitor ] : サーボ位置モニタリング用のウィンドウ（表示位置:上段/左側）
-        # with dpg.window(label="Axis Monitor", width=250, height=370, pos=[5, 5]):
-        #     with dpg.group(label='RightSide'):
-        #         for i in range(0, 15, 1):
-        #             dpg.add_slider_float(default_value=0, tag="ID R"+str(i), label="R"+str(i),
-        #                                 max_value=100, min_value=-100, callback=set_servo_angle,
-        #                                 pos=[10, 35+i*20], width=80)
-        #             # インプットフィールドとエンターボタンを追加
-        #             dpg.add_input_text(tag="Input R"+str(i), decimal=True, width=40,
-        #                             pos=[95, 35+i*20])
-        #             dpg.add_button(label="→", tag="Enter R"+str(i),
-        #                         callback=apply_input_value, user_data="R"+str(i),
-        #                         width=15, pos=[140, 35+i*20])
-
-        #     with dpg.group(label='LeftSide'):
-        #         for i in range(0, 15, 1):
-        #             dpg.add_slider_float(default_value=0, tag="ID L"+str(i), label="L"+str(i),
-        #                                 max_value=100, min_value=-100, callback=set_servo_angle,
-        #                                 pos=[135, 35+i*20], width=80)
-        #             # インプットフィールドとエンターボタンを追加
-        #             dpg.add_input_text(tag="Input L"+str(i), decimal=True, width=40,
-        #                             pos=[220, 35+i*20])
-        #             dpg.add_button(label="→", tag="Enter L"+str(i),
-        #                         callback=apply_input_value, user_data="L"+str(i),
-        #                         width=15, pos=[265, 35+i*20])
-
-        #     dpg.add_button(label="Home", callback=set_servo_home, pos=[
-        #                 10, 340], width=40)
-        #     dpg.add_button(label="Trim", callback=open_trim_window, pos=[
-        #                 55, 340], width=40)
-        #     dpg.add_radio_button(label="display_mode", items=[
-        #                         "Target", "Actual"], callback=change_display_mode,
-        #                         default_value="Actual", pos=[100, 340], horizontal=True)
-
-
-        # with dpg.window(label="Axis Monitor", width=250, height=370, pos=[5, 5]):
-        #     with dpg.group(label='RightSide'):
-        #         for i in range(0, 15, 1):
-        #             dpg.add_slider_float(default_value=0, tag="ID R"+str(i), label="R"+str(
-        #                 i), max_value=100, min_value=-100, callback=set_servo_angle, pos=[10, 35+i*20], width=80)
-        #     with dpg.group(label='LeftSide'):
-        #         for i in range(0, 15, 1):
-        #             dpg.add_slider_float(default_value=0, tag="ID L"+str(i), label="L"+str(
-        #                 i), max_value=100, min_value=-100, callback=set_servo_angle, pos=[135, 35+i*20], width=80)
-        #     dpg.add_button(label="Home", callback=set_servo_home, pos=[
-        #         10, 340], width=40)  # Homeボタンの幅を指定
-        #     dpg.add_button(label="Trim", callback=open_trim_window, pos=[
-        #         55, 340], width=40)  # Trimボタンを追加
-        #     dpg.add_radio_button(label="display_mode", items=[
-        #         "Target", "Actual"], callback=change_display_mode, default_value="Actual", pos=[100, 340], horizontal=True)
+                "Target", "Actual"], callback=change_display_mode,
+                default_value="Actual", pos=[100, 340], horizontal=True)
 
 
 # ------------------------------------------------------------------------
