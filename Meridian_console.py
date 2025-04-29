@@ -192,6 +192,7 @@ class MeridianConsole:
         self.frag_reset_errors = False          # Meridimのエラーカウントをリセットする
         self.flag_disp_send = 0                 # ターミナルに送信データを表示する
         self.flag_disp_rcvd = 0                 # ターミナルに受信データを表示する
+        self.flag_trim_window_open = False      # Trimウィンドウの表示状態を管理
 
         # メッセージ表示用
         self.message0 = "This PC's IP adress is "+get_local_ip()
@@ -304,6 +305,67 @@ def load_udp_send_ip(filename="board_ip.txt"):  # 設定ファイルからIP読�
             print("Invalid IP format. Try again.")
 
     return ip
+
+
+def open_trim_window():  # Trim Setting ウィンドウを開くコールバック関数
+    if not mrd.flag_trim_window_open:
+        mrd.flag_trim_window_open = True
+        print("Open Trim Setting window.")
+        create_trim_window()
+    else:
+        print("Trim Setting window is already open.")
+
+
+def close_trim_window():  # Trim Setting ウィンドウを閉じるコールバック関数
+    mrd.flag_trim_window_open = False
+    dpg.delete_item("Trim Setting")
+    print("Closed Trim Setting window.")
+
+# Power状態を連動させるコールバック関数（Trim Setting側）
+def sync_power_from_trim(sender, app_data, user_data):
+    # Trim Setting側のPowerチェックボックスが変更されたとき
+    # Command側のPowerチェックボックスも同期させる
+    dpg.set_value("Power", app_data)
+    # 元のPowerチェックボックスのコールバックを呼び出し
+    set_servo_power("Power", app_data, None)
+    
+
+# Trim Setting ウィンドウを作成する関数
+def create_trim_window():
+    # ビューポートのサイズを取得して、ウィンドウサイズを決定
+    viewport_width = dpg.get_viewport_width()
+    viewport_height = dpg.get_viewport_height()
+
+    with dpg.window(label="Trim Setting", tag="Trim Setting",
+                    width=viewport_width-20, height=viewport_height-20,
+                    pos=[10, 10], on_close=close_trim_window):
+
+        # ここにトリム設定用のUIコンポーネントを追加
+        dpg.add_text("Servo Trim Settings", pos=[viewport_width//2-80, 30])
+
+        # Powerチェックボックスを追加（Command側と連動）
+        # Command側のPowerチェックボックスの状態を取得して初期値に設定
+        power_state = dpg.get_value("Power")
+        dpg.add_checkbox(label="Power", tag="Power_Trim",
+                         callback=sync_power_from_trim,
+                         default_value=power_state,
+                         pos=[viewport_width//2-80, 60])
+
+        # 左側のサーボのトリム設定
+        dpg.add_text("Left Side Servos", pos=[viewport_width//4-60, 90])
+        for i in range(0, 15, 1):
+            dpg.add_slider_int(default_value=0, tag="Trim_L"+str(i), label="L"+str(i),
+                               max_value=100, min_value=-100, pos=[viewport_width//4-100, 120+i*25], width=200)
+
+        # 右側のサーボのトリム設定
+        dpg.add_text("Right Side Servos", pos=[viewport_width*3//4-60, 90])
+        for i in range(0, 15, 1):
+            dpg.add_slider_int(default_value=0, tag="Trim_R"+str(i), label="R"+str(i),
+                               max_value=100, min_value=-100, pos=[viewport_width*3//4-100, 120+i*25], width=200)
+
+        # 閉じるボタンを最下部に配置
+        dpg.add_button(label="Close", callback=close_trim_window,
+                       width=100, pos=[viewport_width//2-50, viewport_height-60])
 
 
 UDP_SEND_IP_DEF = load_udp_send_ip()        # 送信先のESP32のIPアドレス 21
@@ -939,6 +1001,15 @@ def set_yaw_center():  # IMUのヨー軸センターリセットフラグをcomm
 # [command] ウィンドウのPowerフラグ処理（サーボのオンオフ）
 
 
+# def set_servo_power(sender, app_data, user_data):
+#     if app_data:
+#         mrd.flag_servo_power = 2
+#         print("Servo Power ON")
+#     else:
+#         mrd.flag_servo_power = -1
+#         print("Servo Power OFF")
+
+# [command] ウィンドウのPowerフラグ処理（サーボのオンオフ）の修正版
 def set_servo_power(sender, app_data, user_data):
     if app_data:
         mrd.flag_servo_power = 2
@@ -946,40 +1017,34 @@ def set_servo_power(sender, app_data, user_data):
     else:
         mrd.flag_servo_power = -1
         print("Servo Power OFF")
-
+    
+    # Trim Settingウィンドウが開かれている場合は、そちらのPowerチェックボックスも更新
+    if mrd.flag_trim_window_open and dpg.does_item_exist("Power_Trim"):
+        dpg.set_value("Power_Trim", app_data)
+        
 # [command] ウィンドウのDemoフラグ処理
-
-
 def set_demo_action(sender, app_data, user_data):  # チェックボックスに従いアクション送信フラグをオンオフ
     #    mrd.flag_demo_action=flip_number(mrd.flag_demo_action,"Start DEMO motion data streaming.","Quit DEMO motion data streaming.")
     mrd.flag_demo_action = flip_number(
         app_data, "Start DEMO motion data streaming.", "Quit DEMO motion data streaming.")
 
 # [command] ウィンドウのPythonフラグ処理
-
-
 def set_python_action(sender, app_data, user_data):  # チェックボックスに従いアクション送信フラグをオンオフ
     #    mrd.flag_python_action=flip_number(mrd.flag_python_action,"Start python motion data streaming.","Quit python motion data streaming.")
     mrd.flag_python_action = flip_number(
         app_data, "Start python motion data streaming.", "Quit python motion data streaming.")
 
 # [command] ウィンドウのEnableフラグ処理
-
-
 def set_enable(sender, app_data, user_data):  # チェックボックスに従いデータ送信フラグをオンオフ
     mrd.flag_enable_send_made_data = flip_number(
         app_data, "Start sending data to ESP32.", "Quit sending data to ESP32.")
 
 # [command] ウィンドウのROS1データ送信モードをtarget/actualに切り替え
-
-
 def change_ros1_output_mode(sender, app_data, user_data):
     mrd.flag_ros1_output_mode = flip_number(
         app_data, "Set target data(send data) as ROS1 publish.", "Set actual data(received data) as ROS1 publish.")
 
 # [command] ウィンドウのROS1パブリッシュをオンオフ
-
-
 def ros1_pub():
     if mrd.flag_ros1_pub == 0:
         mrd.flag_ros1_pub = 1
@@ -1125,11 +1190,25 @@ def main():
         # dpg描画処理1 ==========================================================
         dpg.create_context()
         # dpg.create_viewport(title=TITLE_VERSION, width=853, height=540) #mac/ubuntu
-        dpg.create_viewport(title=TITLE_VERSION, width=870, height=580) #win
+        dpg.create_viewport(title=TITLE_VERSION, width=870, height=580)  # win
 
 # ------------------------------------------------------------------------
 # [ Axis Monitor ] : サーボ位置モニタリング用のウィンドウ（表示位置:上段/左側）
 # ------------------------------------------------------------------------
+        # with dpg.window(label="Axis Monitor", width=250, height=370, pos=[5, 5]):
+        #     with dpg.group(label='RightSide'):
+        #         for i in range(0, 15, 1):
+        #             dpg.add_slider_float(default_value=0, tag="ID R"+str(i), label="R"+str(
+        #                 i), max_value=100, min_value=-100, callback=set_servo_angle, pos=[10, 35+i*20], width=80)
+        #     with dpg.group(label='LeftSide'):
+        #         for i in range(0, 15, 1):
+        #             dpg.add_slider_float(default_value=0, tag="ID L"+str(i), label="L"+str(
+        #                 i), max_value=100, min_value=-100, callback=set_servo_angle, pos=[135, 35+i*20], width=80)
+        #     dpg.add_button(label="Home", callback=set_servo_home, pos=[
+        #                    10, 340])  # Sendと書いてあるボタンをwindowの右下に設置
+        #     dpg.add_radio_button(label="display_mode", items=[
+        #                          "Target", "Actual"], callback=change_display_mode, default_value="Actual", pos=[90, 340], horizontal=True)
+
         with dpg.window(label="Axis Monitor", width=250, height=370, pos=[5, 5]):
             with dpg.group(label='RightSide'):
                 for i in range(0, 15, 1):
@@ -1140,9 +1219,12 @@ def main():
                     dpg.add_slider_float(default_value=0, tag="ID L"+str(i), label="L"+str(
                         i), max_value=100, min_value=-100, callback=set_servo_angle, pos=[135, 35+i*20], width=80)
             dpg.add_button(label="Home", callback=set_servo_home, pos=[
-                           10, 340])  # Sendと書いてあるボタンをwindowの右下に設置
+                10, 340], width=60)  # Homeボタンの幅を指定
+            dpg.add_button(label="Trim", callback=open_trim_window, pos=[
+                80, 340], width=60)  # Trimボタンを追加
             dpg.add_radio_button(label="display_mode", items=[
-                                 "Target", "Actual"], callback=change_display_mode, default_value="Actual", pos=[90, 340], horizontal=True)
+                "Target", "Actual"], callback=change_display_mode, default_value="Actual", pos=[150, 340], horizontal=True)
+
 
 # ------------------------------------------------------------------------
 # [ Message ] : メッセージ表示用ウィンドウ（表示位置:下段/左側）
