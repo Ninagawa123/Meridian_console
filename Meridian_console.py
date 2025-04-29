@@ -14,6 +14,7 @@
 # 2024.04.30 L2R2ボタンのアナログ値の表示を修正.
 # 2025.01.26 genesis用のRedis入力を追加. POWERとRedisをチェックで動作.
 # 2025.04.06 マイコンボードのwifiIPアドレスをboard_ip.txtで設定するように変更.
+# 2025.04.29 Trimモードを追加.
 
 # Meridian console 取扱説明書
 #
@@ -91,7 +92,7 @@ except ImportError:
 sys.stdout.reconfigure(encoding='utf-8')
 
 # 定数
-TITLE_VERSION = "Meridian_Console_v25.0406"  # DPGのウィンドウタイトル兼バージョン表示
+TITLE_VERSION = "Meridian_Console_v25.0429"  # DPGのウィンドウタイトル兼バージョン表示
 UDP_RESV_PORT = 22222                       # 受信ポート
 UDP_SEND_PORT = 22224                       # 送信ポート
 MSG_SIZE = 90                               # Meridim配列の長さ(デフォルトは90)
