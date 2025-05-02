@@ -1,6 +1,6 @@
 # !/usr/bin/python3
 # coding: UTF-8
-# もしくは　# !/usr/bin/env python など環境に合わせて
+# もしくは # !/usr/bin/env python など環境に合わせて
 
 # Izumi Ninagawa & Meridian project
 # MIT License
@@ -20,7 +20,7 @@
 #
 # ・起動方法
 # 当ファイルがあるディレクトリにて, ターミナルより
-# python3 Meridian_console.py [送信先のESP32のIPアドレス　例:192.168.1.12]
+# python3 Meridian_console.py [送信先のESP32のIPアドレス 例:192.168.1.12]
 # と入力して実行します. 必要に応じてライブラリをpip3で追加してください
 # （IPアドレスなしで実行した場合は, 82行目のUDP_SEND_IP_DEFでの設定が反映されます）
 # UDP_SEND_IPはESP32の起動時にPCシリアルモニタ上に表示されます
@@ -92,7 +92,7 @@ except ImportError:
 sys.stdout.reconfigure(encoding='utf-8')
 
 # 定数
-TITLE_VERSION = "Meridian_Console_v25.0429"  # DPGのウィンドウタイトル兼バージョン表示
+TITLE_VERSION = "Meridian_Console_v25.0429" # DPGのウィンドウタイトル兼バージョン表示
 UDP_RESV_PORT = 22222                       # 受信ポート
 UDP_SEND_PORT = 22224                       # 送信ポート
 MSG_SIZE = 90                               # Meridim配列の長さ(デフォルトは90)
@@ -107,15 +107,22 @@ REDIS_PORT = 6379
 REDIS_KEY = "meridis"
 
 # マスターコマンド
-MCMD_TORQUE_ALL_OFF = 0                     # すべてのサーボトルクをオフにする（脱力）
-MCMD_UPDATE_YAW_CENTER = 10002              # センサの推定ヨー軸を現在値でゼロに
-MCMD_ENTER_TRIM_MODE = 10003                # トリムモードに入る(現在不使用)
-MCMD_CLEAR_SERVO_ERROR_ID = 10004           # 通信エラーのサーボのIDをクリア
-MCMD_BOARD_TRANSMIT_ACTIVE = 10005          # ボードが定刻で送信を行うモード（デフォルト設定.PC側が受信待ち）
-MCMD_BOARD_TRANSMIT_PASSIVE = 10006         # ボードが受信を待ち返信するモード（PC側が定刻送信）
-MCMD_RESET_MRD_TIMER = 10007                # フレーム管理時計mrd_t_milを現在時刻にリセット
-MCMD_EEPROM_SAVE_TRIM = 10101               # 現在の姿勢をトリム値としてサーボに書き込む
-MCMD_EEPROM_LOAD_TRIM = 10102               # EEPROMのトリム値をサーボに反映する
+MRD_MASTER = 0                      # マスターコマンドのMeridim配列での位置
+MCMD_TORQUE_ALL_OFF = 0             # すべてのサーボトルクをオフにする（脱力）
+MCMD_UPDATE_YAW_CENTER = 10002      # センサの推定ヨー軸を現在値でゼロに
+MCMD_ENTER_TRIM_MODE = 10003        # トリムモードに入る(現在不使用)
+MCMD_CLEAR_SERVO_ERROR_ID = 10004   # 通信エラーのサーボのIDをクリア
+MCMD_BOARD_TRANSMIT_ACTIVE = 10005  # ボードが定刻で送信を行うモード（デフォルト設定.PC側が受信待ち）
+MCMD_BOARD_TRANSMIT_PASSIVE = 10006 # ボードが受信を待ち返信するモード（PC側が定刻送信）
+MCMD_RESET_MRD_TIMER = 10007        # フレーム管理時計mrd_t_milを現在時刻にリセット
+MCMD_EEPROM_SAVE_TRIM = 10101       # 現在の姿勢をトリム値としてサーボに書き込む
+MCMD_EEPROM_LOAD_TRIM = 10102       # EEPROMのトリム値をサーボに反映する
+MCMD_EEPROM_BOARDTOPC_DATA0 = 10200 # EEPROMの[0][x]をボードからPCにMeridimで送信する
+MCMD_EEPROM_BOARDTOPC_DATA1 = 10201 # EEPROMの[1][x]をボードからPCにMeridimで送信する
+MCMD_EEPROM_BOARDTOPC_DATA2 = 10202 # EEPROMの[2][x]をボードからPCにMeridimで送信する
+MCMD_EEPROM_PCTOBOARD_DATA0 = 10300 # EEPROMの[0][x]をPCからボードにMeridimで送信する
+MCMD_EEPROM_PCTOBOARD_DATA1 = 10301 # EEPROMの[1][x]をPCからボードにMeridimで送信する
+MCMD_EEPROM_PCTOBOARD_DATA2 = 10302 # EEPROMの[2][x]をPCからボードにMeridimで送信する
 
 # ================================================================================================================
 # ---- 変数の宣言 -------------------------------------------------------------------------------------------------
@@ -125,24 +132,16 @@ MCMD_EEPROM_LOAD_TRIM = 10102               # EEPROMのトリム値をサーボ�
 class MeridianConsole:
     def __init__(self):
         # Meridim配列関連
-        self.r_meridim = np.zeros(
-            MSG_SIZE, dtype=np.int16)            # Meridim配列
-        self.s_meridim = np.zeros(
-            MSG_SIZE, dtype=np.int16)            # Meridim配列
-        self.r_meridim_char = np.zeros(
-            MSG_SIZE*2, dtype=np.uint8)     # Meridim配列
-        self.r_meridim_ushort = np.zeros(
-            MSG_SIZE*2, dtype=np.uint8)   # Meridim配列
+        self.r_meridim = np.zeros(MSG_SIZE, dtype=np.int16)            # Meridim配列
+        self.s_meridim = np.zeros(MSG_SIZE, dtype=np.int16)            # Meridim配列
+        self.r_meridim_char = np.zeros(MSG_SIZE*2, dtype=np.uint8)     # Meridim配列
+        self.r_meridim_ushort = np.zeros(MSG_SIZE, dtype=np.uint8)     # Meridim配列
         self.d_meridim = np.zeros(MSG_SIZE, dtype=np.int16)            # 表示用
-        self.s_meridim_js_sub_f = np.zeros(
-            MSG_SIZE, dtype=float)      # ROSサブスクライブ用
-        self.pad_button_panel_short = np.array(
-            [0], dtype=np.uint16)   # コンパネからのリモコン入力用
-        self.s_meridim_motion_f = np.zeros(
-            MSG_SIZE, dtype=float)      # PC側で作成したサーボ位置送信用
-        self.s_meridim_motion_keep_f = np.zeros(
-            MSG_SIZE, dtype=float)  # PC側で作成したサーボ位置キープ用
-        self.s_minitermnal_keep = np.zeros((8, 2))  # コンパネからのリモコン入力用
+        self.s_meridim_js_sub_f = np.zeros(MSG_SIZE, dtype=float)      # ROSサブスクライブ用
+        self.pad_button_panel_short = np.array([0], dtype=np.uint16)   # コンパネからのリモコン入力用
+        self.s_meridim_motion_f = np.zeros(MSG_SIZE, dtype=float)      # PC側で作成したサーボ位置送信用
+        self.s_meridim_motion_keep_f = np.zeros(MSG_SIZE, dtype=float) # PC側で作成したサーボ位置キープ用
+        self.s_minitermnal_keep = np.zeros((8, 2))                     # コンパネからのリモコン入力用
         for i in range(8):
             # 該当しないデータにはインデックスに-1を指定して送信データに反映されないようにしておく
             self.s_minitermnal_keep[i][0] = -1
@@ -166,38 +165,36 @@ class MeridianConsole:
         self.error_servo_id_past = 0     # 前回のサーボエラーIDキープ用
 
         # 制御コマンド用フラグ等
-        self.command_send_trial = 1             # Commandを連続で送信する回数
-        self.flag_update_yaw = 0                # IMUのヨー軸センターリセットフラグ(python内部用)
-        self.flag_servo_power = 0               # 全サーボのパワーオンオフフラグ
-        self.flag_udp_resv = True               # UDP受信の完了フラグ
-        self.flag_enable_send_made_data = False  # ESP32への状態データの送信のオンオフフラグ
-        self.flag_resv_data = 0                 # ESP32からの状態データの受信のオンオフフラグ
-        self.flag_send_data = 0                 # ESP32への状態データの送信のオンオフフラグ（サーボオフでも送信可）
-        self.flag_send_virtual = 0              # ハードウェアを接続しないで動作させる場合のバーチャルハードのオンオフフラグ
-        self.flag_send_motion = 0               # 計算モーション送信のオンオフフラグ
-        self.flag_set_miniterminal_data = 0     # ミニターミナルの値をセットするボタンのためのフラグ
-        self.flag_send_miniterminal_data_cont = 0    # ミニターミナルの値を送信するボタンのためのフラグ
-        self.flag_send_miniterminal_data_once = 0    # ミニターミナルの値を1回送信する
-        self.flag_tarminal_mode_send = 0        # miniterminalを有効にし, コマンドを優先する
-        self.flag_demo_action = 0               # デモ/テスト用の計算モーション送信のオンオフフラグ
-        self.flag_python_action = 0             # ユーザー自作python有効のオンオフフラグ
-        self.flag_ros1 = 0                      # ROS1の起動init（初回のみ）
-        self.flag_ros1_pub = 0                  # ROS1のjoint_statesのパブリッシュ
-        self.flag_ros1_sub = 0                  # ROS1のjoint_statesのサブスクライブ
-        self.flag_redis_sub = False             # Redisデータのサブスクライブ
-        self.flag_set_flow_or_step = 1          # Meridianの循環を+:通常フロー, -:ステップ に切り替え
-        self.flag_servo_home = 0                # 全サーボ位置をゼロリセット
-        self.flag_stop_flow = False             # ステップモード中の待機フラグ
-        self.flag_allow_flow = False            # ステップモード中に1回データを流すフラグ
-        # Axis monitorの表示 1:送信データ(target) 0:受信データ(actual)
-        self.flag_display_mode = 0
-        # ROS1にパブリッシュするデータ 1:送信データ(target) 0:受信データ(actual)
-        self.flag_ros1_output_mode = 0
-        self.frag_reset_cycle = False           # ボードのフレームの周波数をリセットする
-        self.frag_reset_errors = False          # Meridimのエラーカウントをリセットする
-        self.flag_disp_send = 0                 # ターミナルに送信データを表示する
-        self.flag_disp_rcvd = 0                 # ターミナルに受信データを表示する
-        self.flag_trim_window_open = False      # Trimウィンドウの表示状態を管理
+        self.command_send_trial = 1               # Commandを連続で送信する回数
+        self.flag_update_yaw = 0                  # IMUのヨー軸センターリセットフラグ(python内部用)
+        self.flag_servo_power = 0                 # 全サーボのパワーオンオフフラグ
+        self.flag_udp_resv = True                 # UDP受信の完了フラグ
+        self.flag_enable_send_made_data = False   # ESP32への状態データの送信のオンオフフラグ
+        self.flag_resv_data = 0                   # ESP32からの状態データの受信のオンオフフラグ
+        self.flag_send_data = 0                   # ESP32への状態データの送信のオンオフフラグ（サーボオフでも送信可）
+        self.flag_send_virtual = 0                # ハードウェアを接続しないで動作させる場合のバーチャルハードのオンオフフラグ
+        self.flag_send_motion = 0                 # 計算モーション送信のオンオフフラグ
+        self.flag_set_miniterminal_data = 0       # ミニターミナルの値をセットするボタンのためのフラグ
+        self.flag_send_miniterminal_data_cont = 0 # ミニターミナルの値を送信するボタンのためのフラグ
+        self.flag_send_miniterminal_data_once = 0 # ミニターミナルの値を1回送信する
+        self.flag_tarminal_mode_send = 0          # miniterminalを有効にし, コマンドを優先する
+        self.flag_demo_action = 0                 # デモ/テスト用の計算モーション送信のオンオフフラグ
+        self.flag_python_action = 0               # ユーザー自作python有効のオンオフフラグ
+        self.flag_ros1 = 0                        # ROS1の起動init（初回のみ）
+        self.flag_ros1_pub = 0                    # ROS1のjoint_statesのパブリッシュ
+        self.flag_ros1_sub = 0                    # ROS1のjoint_statesのサブスクライブ
+        self.flag_redis_sub = False               # Redisデータのサブスクライブ
+        self.flag_set_flow_or_step = 1            # Meridianの循環を+:通常フロー, -:ステップ に切り替え
+        self.flag_servo_home = 0                  # 全サーボ位置をゼロリセット
+        self.flag_stop_flow = False               # ステップモード中の待機フラグ
+        self.flag_allow_flow = False              # ステップモード中に1回データを流すフラグ
+        self.flag_display_mode = 0                # Axis monitorの表示 1:送信データ(target) 0:受信データ(actual)
+        self.flag_ros1_output_mode = 0            # ROS1にパブするデータ 1:送信データ(target) 0:受信データ(actual)
+        self.frag_reset_cycle = False             # ボードのフレームの周波数をリセットする
+        self.frag_reset_errors = False            # Meridimのエラーカウントをリセットする
+        self.flag_disp_send = 0                   # ターミナルに送信データを表示する
+        self.flag_disp_rcvd = 0                   # ターミナルに受信データを表示する
+        self.flag_trim_window_open = False        # Trimウィンドウの表示状態を管理
 
         # メッセージ表示用
         self.message0 = "This PC's IP adress is "+get_local_ip()
@@ -441,9 +438,9 @@ def apply_trim_input_value(sender, app_data, user_data):
 
 
 # EEPROMへの保存コールバック関数
-def save_to_eeprom():
+def save_trimdata_to_eeprom():
     # MeridimのマスターコマンドMCMD_EEPROM_SAVE_TRIM(10101)を送信するための処理
-    print("Sending command to save to EEPROM...")
+    # print("Sending command to save trim data to EEPROM...")
 
     # Mini Terminalのデータをセットする処理（1つめのスロットにマスターコマンドをセット）
     dpg.set_value("s_index0", "0")  # インデックス0（マスターコマンド）
@@ -454,13 +451,13 @@ def save_to_eeprom():
     set_tarminal_send_on()
     mrd.flag_send_miniterminal_data_once = 1    # ミニターミナルの値を1回送信する
 
-    print("Command sent: Save to EEPROM (10101)")
+    print("Command sent: Save trim data to EEPROM (10101)")
 
 
-# EEPROMからの読み込みコールバック関数
-def load_from_eeprom():
+# EEPROMからBoardへの読み込みコールバック関数
+def load_trimdata_from_eeprom_to_board():
     # Meridimのマスターコマンド10102を送信するための処理
-    print("Sending command to load from EEPROM...")
+    #print("Sending command to load from EEPROM to board...")
 
     # Mini Terminalのデータをセットする処理（1つめのスロットにマスターコマンドをセット）
     dpg.set_value("s_index0", "0")  # インデックス0（マスターコマンド）
@@ -471,8 +468,23 @@ def load_from_eeprom():
     set_tarminal_send_on()
     mrd.flag_send_miniterminal_data_once = 1    # ミニターミナルの値を1回送信する
 
-    print("Command sent: Load from EEPROM (10102)")
+    print("Command sent: Load trim data from EEPROM to board (10102)")
 
+# EEPROMからConsoleへの読み込みコールバック関数
+def load_from_eeprom_to_console():
+    # Meridimのマスターコマンド10102を送信するための処理
+    #print("Sending command to load from EEPROM...")
+
+    # Mini Terminalのデータをセットする処理（1つめのスロットにマスターコマンドをセット）
+    dpg.set_value("s_index0", "0")  # インデックス0（マスターコマンド）
+    dpg.set_value("s_data0", MCMD_EEPROM_BOARDTOPC_DATA1)  # マスターコマンド値10102
+
+    # データをセットしてから送信
+    set_miniterminal_data()
+    set_tarminal_send_on()
+    mrd.flag_send_miniterminal_data_once = 1    # ミニターミナルの値を1回送信する
+
+    print("Command sent: Load from EEPROM[1][*] to Console (10201)")
 
 # Trim Setting ウィンドウを作成する関数
 def create_trim_window():
@@ -485,7 +497,7 @@ def create_trim_window():
                     pos=[10, 10], on_close=close_trim_window):
 
         # トリム設定用のUIコンポーネントを追加
-        #dpg.add_text("Servo Trim Settings", pos=[viewport_width//2-80, 30])
+        # dpg.add_text("Servo Trim Settings", pos=[viewport_width//2-80, 30])
 
         # コントロールエリア
         # Command側のチェックボックスの状態を取得して初期値に設定
@@ -498,30 +510,26 @@ def create_trim_window():
                        pos=[viewport_width//2-318, 40], width=40)
 
         # Powerチェックボックス
-        dpg.add_checkbox(label="Power", tag="Power_Trim",
-                         callback=sync_power_from_trim,
-                         default_value=power_state,
-                         pos=[viewport_width//2-250, 40])
+        dpg.add_checkbox(label="Power", tag="Power_Trim", callback=sync_power_from_trim,
+                         default_value=power_state, pos=[viewport_width//2-250, 40])
 
         # Pythonチェックボックス
-        dpg.add_checkbox(label="Python", tag="Python_Trim",
-                         callback=sync_python_from_trim,
-                         default_value=python_state,
-                         pos=[viewport_width//2-170, 40])
+        dpg.add_checkbox(label="Python", tag="Python_Trim", callback=sync_python_from_trim,
+                         default_value=python_state, pos=[viewport_width//2-170, 40])
 
         # Enableチェックボックス
-        dpg.add_checkbox(label="Enable", tag="Enable_Trim",
-                         callback=sync_enable_from_trim,
-                         default_value=enable_state,
-                         pos=[viewport_width//2-90, 40])
+        dpg.add_checkbox(label="Enable", tag="Enable_Trim", callback=sync_enable_from_trim,
+                         default_value=enable_state, pos=[viewport_width//2-90, 40])
 
         # EEPROMボタンを追加
-        dpg.add_button(label="Save to EEPROM", callback=save_to_eeprom,
+        dpg.add_button(label="Save to EEPROM", callback=save_trimdata_to_eeprom,
                        pos=[viewport_width//2+45, 40], width=125)
-        
-        dpg.add_button(label="Load from EEPROM", callback=load_from_eeprom,
-                       pos=[viewport_width//2+183, 40], width=125)
 
+        dpg.add_button(label="Load from EEPROM to Board  ", callback=load_trimdata_from_eeprom_to_board,
+                       pos=[viewport_width//2+183, 40], width=200)
+
+        dpg.add_button(label="Load from EEPROM to Console", callback=load_from_eeprom_to_console,
+                       pos=[viewport_width//2+183, 65], width=200)
 
         # 右側のサーボのトリム設定
         dpg.add_text("Right Side Servos", pos=[viewport_width//4-75, 90])
@@ -532,7 +540,7 @@ def create_trim_window():
 
             # スライダー
             dpg.add_slider_float(default_value=current_value, tag=f"Trim_R{i}", label=f"R{i}",
-                                 max_value=100, min_value=-100,
+                                 max_value=180, min_value=-180, 
                                  pos=[viewport_width//4-100, 120+i*25], width=160,
                                  callback=set_servo_angle_from_trim)
 
@@ -545,7 +553,6 @@ def create_trim_window():
                            callback=apply_trim_input_value, user_data=f"R{i}",
                            width=42, pos=[viewport_width//4+120, 120+i*25])
 
-
         # 左側のサーボのトリム設定
         dpg.add_text("Left Side Servos", pos=[viewport_width*6//9-75, 90])
         for i in range(0, 15, 1):
@@ -554,7 +561,7 @@ def create_trim_window():
 
             # スライダー
             dpg.add_slider_float(default_value=current_value, tag=f"Trim_L{i}", label=f"L{i}",
-                                 max_value=100, min_value=-100,
+                                 max_value=180, min_value=-180,
                                  pos=[viewport_width*6//9-100, 120+i*25], width=160,
                                  callback=set_servo_angle_from_trim)
 
@@ -566,12 +573,12 @@ def create_trim_window():
             dpg.add_button(label="Enter", tag=f"Enter_Trim_L{i}",
                            callback=apply_trim_input_value, user_data=f"L{i}",
                            width=42, pos=[viewport_width*6//9+120, 120+i*25])
-            
+
         # 閉じるボタンを最下部に配置
         dpg.add_button(label="Close", callback=close_trim_window,
                        width=100, pos=[viewport_width//2-50, viewport_height-60])
-        
-                    
+
+
 UDP_SEND_IP_DEF = load_udp_send_ip()        # 送信先のESP32のIPアドレス 21
 UDP_SEND_IP = get_udp_send_ip()
 
@@ -764,316 +771,280 @@ def meridian_loop():
 # [ 4-1 ] : チェックサムがOK かつ シーケンス番号が前回と異なっていれば, 処理に回す
                 if (_checksum[0] == mrd.r_meridim[MSG_SIZE-1]) and (mrd.frame_sync_r_resv != mrd.frame_sync_r_last):
 
-                    # 受信データを送信データに転記
-                    for i in range(MSG_SIZE-1):
-                        mrd.s_meridim[i] = mrd.r_meridim[i]
+                    # マスターコマンドがMSG_SIZEより大きければ、特殊コマンドを実行
+                    if (mrd.r_meridim[MRD_MASTER] > MSG_SIZE): 
+                        #print("mastercommand >< 90")
+                        #print(mrd.r_meridim[MRD_MASTER])
 
-# [ 4-2 ] : シーケンス番号の処理
-                    mrd.frame_sync_r_expect += 1  # 予想シーケンス番号のカウントアップ
-                    if mrd.frame_sync_r_expect > 59999:
-                        mrd.frame_sync_r_expect = 0
+                        if mrd.r_meridim[MRD_MASTER] == MCMD_EEPROM_BOARDTOPC_DATA0:
+                            print('rcvd EEPROM[0][*]:'+' '.join(map(str, mrd.r_meridim)))
 
-                    if (mrd.frame_sync_r_resv == mrd.frame_sync_r_expect):  # 受信したカウントが予想通りであればスキップなし
-                        _temp_int16 &= 0b1111111011111111  # PCのESP経由Teensyからの連番スキップフラグを下げる
+                        if mrd.r_meridim[MRD_MASTER] == MCMD_EEPROM_BOARDTOPC_DATA1:
+                            print('rcvd EEPROM[1][*]:'+' '.join(map(str, mrd.r_meridim)))
+                            
+                            
+                        if mrd.r_meridim[MRD_MASTER] == MCMD_EEPROM_BOARDTOPC_DATA2:
+                            print('rcvd EEPROM[2][*]:'+' '.join(map(str, mrd.r_meridim)))
+                            
+                    # 以降は特殊コマンドではなく, 通常フローの実行
                     else:
-                        _temp_int16 |= 0b0000000100000000  # PCのESP経由Teensyからの連番スキップフラグを上げる
-                        mrd.frame_sync_r_expect = mrd.frame_sync_r_resv  # 受信カウントの方が多ければズレを検出し, 追いつく
-                        mrd.error_count_pc_skip += 1  # スキップカウントをプラス
+                        # 受信データを送信データに転記
+                        for i in range(MSG_SIZE-1):
+                            mrd.s_meridim[i] = mrd.r_meridim[i]
 
-# [ 4-3 ] : 最終サーボ位置情報のキープ
-                    if mrd.flag_servo_power == 2:  # サーボオンボタン押下初回のみ最終受け取りサーボ情報をキープ
-                        for i in range(21, 81, 2):
-                            mrd.s_meridim_motion_keep_f[i] = mrd.r_meridim[i]*0.01
-                        mrd.flag_servo_power = 1
+    # [ 4-2 ] : シーケンス番号の処理
+                        mrd.frame_sync_r_expect += 1  # 予想シーケンス番号のカウントアップ
+                        if mrd.frame_sync_r_expect > 59999:
+                            mrd.frame_sync_r_expect = 0
 
-                    if mrd.flag_servo_power == -1:  # サーボオフボタン押下初回のみ最終送信サーボ情報をキープ
-                        for i in range(21, 81, 2):
-                            mrd.s_meridim_motion_keep_f[i] = mrd.s_meridim[i]*0.01
-                        mrd.flag_servo_power = 0
+                        if (mrd.frame_sync_r_resv == mrd.frame_sync_r_expect):  # 受信したカウントが予想通りであればスキップなし
+                            _temp_int16 &= 0b1111111011111111  # PCのESP経由Teensyからの連番スキップフラグを下げる
+                        else:
+                            _temp_int16 |= 0b0000000100000000  # PCのESP経由Teensyからの連番スキップフラグを上げる
+                            mrd.frame_sync_r_expect = mrd.frame_sync_r_resv  # 受信カウントの方が多ければズレを検出し, 追いつく
+                            mrd.error_count_pc_skip += 1  # スキップカウントをプラス
 
-# ------------------------------------------------------------------------
-# [ 5 ] : 送信用UDPデータの作成
-# ------------------------------------------------------------------------
-# [ 5-1 ] : 送信するサーボ位置を以下の場合別に s_meridim_motion に格納
-                    if _checksum[0] == mrd.r_meridim[MSG_SIZE-1]:  # 受信成功時はデータ更新
-                        mrd.s_meridim.fill(0)  # 配列内のデータをゼロでリセット
+    # [ 4-3 ] : 最終サーボ位置情報のキープ
+                        if mrd.flag_servo_power == 2:  # サーボオンボタン押下初回のみ最終受け取りサーボ情報をキープ
+                            for i in range(21, 81, 2):
+                                mrd.s_meridim_motion_keep_f[i] = mrd.r_meridim[i]*0.01
+                            mrd.flag_servo_power = 1
 
-# ▶︎ 5-1-1 : ① 受信値そのままの場合：送信データのベースを受信データのコピーで作成
-                    if mrd.flag_servo_power:  # サーボパワーオン時は, 電源入力時に保持した値を固定で流す（ハウリング的なサーボ位置ズレの増幅を防止）
-                        for i in range(21, 81, 2):
-                            mrd.s_meridim[i] = int(
-                                mrd.s_meridim_motion_keep_f[i]*100)
-                    else:
-                        if mrd.flag_resv_data:
-                            for i in range(21, 81, 2):  # 受信サーボ値を書き込みモーションのベースとして一旦キープ
-                                mrd.s_meridim_motion_f[i] = mrd.r_meridim[i]*0.01
+                        if mrd.flag_servo_power == -1:  # サーボオフボタン押下初回のみ最終送信サーボ情報をキープ
+                            for i in range(21, 81, 2):
+                                mrd.s_meridim_motion_keep_f[i] = mrd.s_meridim[i]*0.01
+                            mrd.flag_servo_power = 0
 
-# ▶︎ 5-1-2 : ② サーボ位置にROSのサブスクライブを反映させる場合にはここでデータを作成★★
-                    if mrd.flag_ros1_sub:
-                        for i in range(15):
-                            mrd.s_meridim_motion_f[21+i *
-                                                   2] = mrd.s_meridim_js_sub_f[21+i*2]
-                            mrd.s_meridim_motion_f[51+i *
-                                                   2] = mrd.s_meridim_js_sub_f[51+i*2]
+    # ------------------------------------------------------------------------
+    # [ 5 ] : 送信用UDPデータの作成
+    # ------------------------------------------------------------------------
+    # [ 5-1 ] : 送信するサーボ位置を以下の場合別に s_meridim_motion に格納
+                        if _checksum[0] == mrd.r_meridim[MSG_SIZE-1]:  # 受信成功時はデータ更新
+                            mrd.s_meridim.fill(0)  # 配列内のデータをゼロでリセット
 
-# ▶︎ 5-1-3 : ③ サーボ位置をここで計算制御する場合は以下でデータを作成(まずはデモモーションのみで運用テスト)
-                    if mrd.flag_demo_action:
-                        # xをフレームごとにカウントアップ
-                        mrd.x += math.pi/STEP
-                        if mrd.x > math.pi*2000:
-                            mrd.x = 0
-                        # サインカーブで全身をくねらせる様にダンス
-                        mrd.s_meridim_motion_f[21] = int(
-                            np.sin(mrd.x)*30)           # 頭ヨー
-                        mrd.s_meridim_motion_f[23] = int(
-                            np.sin(mrd.x)*10) + 20    # 左肩ピッチ
-                        mrd.s_meridim_motion_f[25] = - \
-                            int(np.sin(mrd.x*2)*10) + 10  # 左肩ロール
-                        mrd.s_meridim_motion_f[27] = int(
-                            np.sin(mrd.x)*10) + 10    # 左肘ヨー
-                        mrd.s_meridim_motion_f[29] = int(
-                            np.sin(mrd.x)*30) - 30    # 左肘ピッチ
-                        mrd.s_meridim_motion_f[31] = int(
-                            np.sin(mrd.x)*5)            # 左股ヨー
-                        mrd.s_meridim_motion_f[33] = - \
-                            int(np.sin(mrd.x)*4)           # 左股ロール
-                        mrd.s_meridim_motion_f[35] = int(
-                            np.sin(mrd.x*2)*20) - 2   # 左股ピッチ
-                        mrd.s_meridim_motion_f[37] = - \
-                            int(np.sin(mrd.x*2)*40)        # 左膝ピッチ
-                        mrd.s_meridim_motion_f[39] = int(
-                            np.sin(mrd.x*2)*20) - 2   # 左足首ピッチ
-                        mrd.s_meridim_motion_f[41] = int(
-                            np.sin(mrd.x)*4)            # 左足首ロール
-                        mrd.s_meridim_motion_f[51] = - \
-                            int(np.sin(mrd.x)*20)          # 腰ヨー
-                        mrd.s_meridim_motion_f[53] = - \
-                            int(np.sin(mrd.x)*10) + 20   # 右肩ピッチ
-                        mrd.s_meridim_motion_f[55] = - \
-                            int(np.sin(mrd.x*2)*10) + 10  # 右肩ロール
-                        mrd.s_meridim_motion_f[57] = - \
-                            int(np.sin(mrd.x)*10) + 10   # 右肘ヨー
-                        mrd.s_meridim_motion_f[59] = - \
-                            int(np.sin(mrd.x)*30) - 30   # 右肘ピッチ
-                        mrd.s_meridim_motion_f[61] = - \
-                            int(np.sin(mrd.x)*5)           # 右股ヨー
-                        mrd.s_meridim_motion_f[63] = int(
-                            np.sin(mrd.x)*4)            # 右股ロール
-                        mrd.s_meridim_motion_f[65] = - \
-                            int(np.sin(mrd.x*2)*20) - 2  # 右股ピッチ
-                        mrd.s_meridim_motion_f[67] = int(
-                            np.sin(mrd.x*2)*40)         # 右膝ピッチ
-                        mrd.s_meridim_motion_f[69] = - \
-                            int(np.sin(mrd.x*2)*20) - 2  # 右足首ピッチ
-                        mrd.s_meridim_motion_f[71] = - \
-                            int(np.sin(mrd.x)*4)           # 右足首ロール
-                        if mrd.flag_enable_send_made_data:
+    # ▶︎ 5-1-1 : ① 受信値そのままの場合：送信データのベースを受信データのコピーで作成
+                        if mrd.flag_servo_power:  # サーボパワーオン時は, 電源入力時に保持した値を固定で流す（ハウリング的なサーボ位置ズレの増幅を防止）
+                            for i in range(21, 81, 2):
+                                mrd.s_meridim[i] = int(mrd.s_meridim_motion_keep_f[i]*100)
+                        else:
+                            if mrd.flag_resv_data:
+                                for i in range(21, 81, 2):  # 受信サーボ値を書き込みモーションのベースとして一旦キープ
+                                    mrd.s_meridim_motion_f[i] = mrd.r_meridim[i]*0.01
+
+    # ▶︎ 5-1-2 : ② サーボ位置にROSのサブスクライブを反映させる場合にはここでデータを作成★★
+                        if mrd.flag_ros1_sub:
                             for i in range(15):
-                                mrd.s_meridim_motion_keep_f[21+i *
-                                                            2] = mrd.s_meridim_motion_f[21+i*2]
-                                mrd.s_meridim_motion_keep_f[51+i *
-                                                            2] = mrd.s_meridim_motion_f[51+i*2]
+                                mrd.s_meridim_motion_f[21+i * 2] = mrd.s_meridim_js_sub_f[21+i*2]
+                                mrd.s_meridim_motion_f[51+i * 2] = mrd.s_meridim_js_sub_f[51+i*2]
 
-# ▶︎ 5-1-4 : ④ ユーザーがサーボ位置処理を反映させる場合 → ここで自由にコードを作成
-                    # redisからのデータを仮にここで処理
-                    fetch_redis_data()
+    # ▶︎ 5-1-3 : ③ サーボ位置をここで計算制御する場合は以下でデータを作成(まずはデモモーションのみで運用テスト)
+                        if mrd.flag_demo_action:
+                            # xをフレームごとにカウントアップ
+                            mrd.x += math.pi/STEP
+                            if mrd.x > math.pi*2000:
+                                mrd.x = 0
+                            # サインカーブで全身をくねらせる様にダンス
+                            mrd.s_meridim_motion_f[21] = int(np.sin(mrd.x)*30)         # 頭ヨー
+                            mrd.s_meridim_motion_f[23] = int(np.sin(mrd.x)*10) + 20    # 左肩ピッチ
+                            mrd.s_meridim_motion_f[25] = -int(np.sin(mrd.x*2)*10) + 10 # 左肩ロール
+                            mrd.s_meridim_motion_f[27] = int(np.sin(mrd.x)*10) + 10    # 左肘ヨー
+                            mrd.s_meridim_motion_f[29] = int(np.sin(mrd.x)*30) - 30    # 左肘ピッチ
+                            mrd.s_meridim_motion_f[31] = int(np.sin(mrd.x)*5)          # 左股ヨー
+                            mrd.s_meridim_motion_f[33] = -int(np.sin(mrd.x)*4)         # 左股ロール
+                            mrd.s_meridim_motion_f[35] = int(np.sin(mrd.x*2)*20) - 2   # 左股ピッチ
+                            mrd.s_meridim_motion_f[37] = -int(np.sin(mrd.x*2)*40)      # 左膝ピッチ
+                            mrd.s_meridim_motion_f[39] = int(np.sin(mrd.x*2)*20) - 2   # 左足首ピッチ
+                            mrd.s_meridim_motion_f[41] = int(np.sin(mrd.x)*4)          # 左足首ロール
+                            mrd.s_meridim_motion_f[51] = -int(np.sin(mrd.x)*20)        # 腰ヨー
+                            mrd.s_meridim_motion_f[53] = -int(np.sin(mrd.x)*10) + 20   # 右肩ピッチ
+                            mrd.s_meridim_motion_f[55] = -int(np.sin(mrd.x*2)*10) + 10 # 右肩ロール
+                            mrd.s_meridim_motion_f[57] = -int(np.sin(mrd.x)*10) + 10   # 右肘ヨー
+                            mrd.s_meridim_motion_f[59] = -int(np.sin(mrd.x)*30) - 30   # 右肘ピッチ
+                            mrd.s_meridim_motion_f[61] = -int(np.sin(mrd.x)*5)         # 右股ヨー
+                            mrd.s_meridim_motion_f[63] = int(np.sin(mrd.x)*4)          # 右股ロール
+                            mrd.s_meridim_motion_f[65] = -int(np.sin(mrd.x*2)*20) - 2  # 右股ピッチ
+                            mrd.s_meridim_motion_f[67] = int(np.sin(mrd.x*2)*40)       # 右膝ピッチ
+                            mrd.s_meridim_motion_f[69] = -int(np.sin(mrd.x*2)*20) - 2  # 右足首ピッチ
+                            mrd.s_meridim_motion_f[71] = -int(np.sin(mrd.x)*4)         # 右足首ロール
+                            if mrd.flag_enable_send_made_data:
+                                for i in range(15):
+                                    mrd.s_meridim_motion_keep_f[21+i * 2] = mrd.s_meridim_motion_f[21+i*2]
+                                    mrd.s_meridim_motion_keep_f[51+i * 2] = mrd.s_meridim_motion_f[51+i*2]
 
-                    if mrd.flag_python_action:  # コード書式は自由だが, 仮にすべての関節角度に0を代入する場合の例
-                        # 頭ヨー
-                        mrd.s_meridim_motion_f[21] = mrd.s_meridim_motion_f[21]
-                        # 左肩ピッチ
-                        mrd.s_meridim_motion_f[23] = mrd.s_meridim_motion_f[23]
-                        # 左肩ロール
-                        mrd.s_meridim_motion_f[25] = mrd.s_meridim_motion_f[25]
-                        # 左肘ヨー
-                        mrd.s_meridim_motion_f[27] = mrd.s_meridim_motion_f[27]
-                        # 左肘ピッチ
-                        mrd.s_meridim_motion_f[29] = mrd.s_meridim_motion_f[29]
-                        # 左股ヨー
-                        mrd.s_meridim_motion_f[31] = mrd.s_meridim_motion_f[31]
-                        # 左股ロール
-                        mrd.s_meridim_motion_f[33] = mrd.s_meridim_motion_f[33]
-                        # 左股ピッチ
-                        mrd.s_meridim_motion_f[35] = mrd.s_meridim_motion_f[35]
-                        # 左膝ピッチ
-                        mrd.s_meridim_motion_f[37] = mrd.s_meridim_motion_f[37]
-                        # 左足首ピッチ
-                        mrd.s_meridim_motion_f[39] = mrd.s_meridim_motion_f[39]
-                        # 左足首ロール
-                        mrd.s_meridim_motion_f[41] = mrd.s_meridim_motion_f[41]
-                        # 腰ヨー
-                        mrd.s_meridim_motion_f[51] = mrd.s_meridim_motion_f[51]
-                        # 右肩ピッチ
-                        mrd.s_meridim_motion_f[53] = mrd.s_meridim_motion_f[53]
-                        # 右肩ロール
-                        mrd.s_meridim_motion_f[55] = mrd.s_meridim_motion_f[55]
-                        # 右肘ヨー
-                        mrd.s_meridim_motion_f[57] = mrd.s_meridim_motion_f[57]
-                        # 右肘ピッチ
-                        mrd.s_meridim_motion_f[59] = mrd.s_meridim_motion_f[59]
-                        # 右股ヨー
-                        mrd.s_meridim_motion_f[61] = mrd.s_meridim_motion_f[61]
-                        # 右股ロール
-                        mrd.s_meridim_motion_f[63] = mrd.s_meridim_motion_f[63]
-                        # 右股ピッチ
-                        mrd.s_meridim_motion_f[65] = mrd.s_meridim_motion_f[65]
-                        # 右膝ピッチ
-                        mrd.s_meridim_motion_f[67] = mrd.s_meridim_motion_f[67]
-                        # 右足首ピッチ
-                        mrd.s_meridim_motion_f[69] = mrd.s_meridim_motion_f[69]
-                        # 右足首ロール
-                        mrd.s_meridim_motion_f[71] = mrd.s_meridim_motion_f[71]
+    # ▶︎ 5-1-4 : ④ ユーザーがサーボ位置処理を反映させる場合 → ここで自由にコードを作成
+                        # redisからのデータを仮にここで処理
+                        fetch_redis_data()
 
-# [ 5-2 ] : サーボ位置リセットボタン(Home)が押下されていたら全サーボ位置をゼロリセット
-                    if mrd.flag_servo_home > 0:
-                        for i in range(15):
-                            mrd.s_meridim[21+i*2] = 0
-                            mrd.s_meridim[51+i*2] = 0
-                            mrd.s_meridim_motion_f[21+i*2] = 0
-                            mrd.s_meridim_motion_f[51+i*2] = 0
-                            mrd.s_meridim_motion_keep_f[21+i*2] = 0
-                            mrd.s_meridim_motion_keep_f[51+i*2] = 0
-                        mrd.flag_servo_home = 0
+                        if mrd.flag_python_action:  # コード書式は自由だが, 仮にすべての関節角度に0を代入する場合の例
+                            mrd.s_meridim_motion_f[21] = mrd.s_meridim_motion_f[21] # 頭ヨー
+                            mrd.s_meridim_motion_f[23] = mrd.s_meridim_motion_f[23] # 左肩ピッチ
+                            mrd.s_meridim_motion_f[25] = mrd.s_meridim_motion_f[25] # 左肩ロール
+                            mrd.s_meridim_motion_f[27] = mrd.s_meridim_motion_f[27] # 左肘ヨー
+                            mrd.s_meridim_motion_f[29] = mrd.s_meridim_motion_f[29] # 左肘ピッチ
+                            mrd.s_meridim_motion_f[31] = mrd.s_meridim_motion_f[31] # 左股ヨー
+                            mrd.s_meridim_motion_f[33] = mrd.s_meridim_motion_f[33] # 左股ロール
+                            mrd.s_meridim_motion_f[35] = mrd.s_meridim_motion_f[35] # 左股ピッチ
+                            mrd.s_meridim_motion_f[37] = mrd.s_meridim_motion_f[37] # 左膝ピッチ
+                            mrd.s_meridim_motion_f[39] = mrd.s_meridim_motion_f[39] # 左足首ピッチ
+                            mrd.s_meridim_motion_f[41] = mrd.s_meridim_motion_f[41] # 左足首ロール
+                            mrd.s_meridim_motion_f[51] = mrd.s_meridim_motion_f[51] # 腰ヨー
+                            mrd.s_meridim_motion_f[53] = mrd.s_meridim_motion_f[53] # 右肩ピッチ
+                            mrd.s_meridim_motion_f[55] = mrd.s_meridim_motion_f[55] # 右肩ロール
+                            mrd.s_meridim_motion_f[57] = mrd.s_meridim_motion_f[57] # 右肘ヨー
+                            mrd.s_meridim_motion_f[59] = mrd.s_meridim_motion_f[59] # 右肘ピッチ
+                            mrd.s_meridim_motion_f[61] = mrd.s_meridim_motion_f[61] # 右股ヨー
+                            mrd.s_meridim_motion_f[63] = mrd.s_meridim_motion_f[63] # 右股ロール
+                            mrd.s_meridim_motion_f[65] = mrd.s_meridim_motion_f[65] # 右股ピッチ
+                            mrd.s_meridim_motion_f[67] = mrd.s_meridim_motion_f[67] # 右膝ピッチ
+                            mrd.s_meridim_motion_f[69] = mrd.s_meridim_motion_f[69] # 右足首ピッチ
+                            mrd.s_meridim_motion_f[71] = mrd.s_meridim_motion_f[71] # 右足首ロール
 
-# [ 5-3 ] : PC側発行のサーボ位置をs_meridimに書き込む
-                    if mrd.flag_enable_send_made_data:  # PC側発行データの送信Enable判定
-                        for i in range(21, 81, 2):
-                            if mrd.flag_demo_action | mrd.flag_python_action | mrd.flag_ros1_sub:
-                                mrd.s_meridim[i] = int(
-                                    mrd.s_meridim_motion_f[i]*100)
-                            else:  # Consoleでモーションを指定しない場合はハンチング防止としてサーボオフ時のデータを送信
-                                mrd.s_meridim[i] = int(
-                                    mrd.s_meridim_motion_keep_f[i]*100)
+    # [ 5-2 ] : サーボ位置リセットボタン(Home)が押下されていたら全サーボ位置をゼロリセット
+                        if mrd.flag_servo_home > 0:
+                            for i in range(15):
+                                mrd.s_meridim[21+i*2] = 0
+                                mrd.s_meridim[51+i*2] = 0
+                                mrd.s_meridim_motion_f[21+i*2] = 0
+                                mrd.s_meridim_motion_f[51+i*2] = 0
+                                mrd.s_meridim_motion_keep_f[21+i*2] = 0
+                                mrd.s_meridim_motion_keep_f[51+i*2] = 0
+                            mrd.flag_servo_home = 0
 
-# [ 5-4 ] : サーボオンオフフラグチェック：サーボオンフラグを格納
-                    if mrd.flag_servo_power > 0:
-                        for i in range(20, 80, 2):
-                            mrd.s_meridim[i] = 1
-                    else:
-                        for i in range(20, 80, 2):
-                            mrd.s_meridim[i] = 0
+    # [ 5-3 ] : PC側発行のサーボ位置をs_meridimに書き込む
+                        if mrd.flag_enable_send_made_data:  # PC側発行データの送信Enable判定
+                            for i in range(21, 81, 2):
+                                if mrd.flag_demo_action | mrd.flag_python_action | mrd.flag_ros1_sub:
+                                    mrd.s_meridim[i] = int(
+                                        mrd.s_meridim_motion_f[i]*100)
+                                else:  # Consoleでモーションを指定しない場合はハンチング防止としてサーボオフ時のデータを送信
+                                    mrd.s_meridim[i] = int(
+                                        mrd.s_meridim_motion_keep_f[i]*100)
 
-# [ 5-5 ] : リモコンデータをリセットし, PCからのリモコン入力値を格納
-                    temp = np.array([0], dtype=np.int16)
-                    temp[0] = 0
-                    temp[0] = mrd.pad_button_panel_short[0]  # ボタンのショート型変換
-                    mrd.s_meridim[15] = temp[0]  # ボタン
-                    mrd.s_meridim[16] = 0  # アナログ1
-                    mrd.s_meridim[17] = 0  # アナログ2
-                    mrd.s_meridim[18] = 0  # アナログ3
+    # [ 5-4 ] : サーボオンオフフラグチェック：サーボオンフラグを格納
+                        if mrd.flag_servo_power > 0:
+                            for i in range(20, 80, 2):
+                                mrd.s_meridim[i] = 1
+                        else:
+                            for i in range(20, 80, 2):
+                                mrd.s_meridim[i] = 0
 
-# [ 5-6 ] : 送信マスターコマンドの作成
-                    mrd.s_meridim[0] = MSG_SIZE  # デフォルト値を格納
+    # [ 5-5 ] : リモコンデータをリセットし, PCからのリモコン入力値を格納
+                        temp = np.array([0], dtype=np.int16)
+                        temp[0] = 0
+                        temp[0] = mrd.pad_button_panel_short[0]  # ボタンのショート型変換
+                        mrd.s_meridim[15] = temp[0]  # ボタン
+                        mrd.s_meridim[16] = 0  # アナログ1
+                        mrd.s_meridim[17] = 0  # アナログ2
+                        mrd.s_meridim[18] = 0  # アナログ3
 
-# ▶︎ 5-6-1 : ヨー軸センターリセットコマンドを格納
-                    if (mrd.flag_update_yaw > 0):
-                        mrd.flag_update_yaw -= 1
-                        mrd.s_meridim[0] = MCMD_UPDATE_YAW_CENTER
-                        if (mrd.flag_update_yaw == 0):
-                            print(
-                                "Send COMMAND 'Set Yaw Center.':["+str(MCMD_UPDATE_YAW_CENTER)+"]")
+    # [ 5-6 ] : 送信マスターコマンドの作成
+                        mrd.s_meridim[0] = MSG_SIZE  # デフォルト値を格納
 
-# ▶︎ 5-6-2 : フローモード(ボード側が周期制御を持つ)への切り替え
-                    if mrd.flag_set_flow_or_step == 2:
-                        mrd.s_meridim[0] = MCMD_BOARD_TRANSMIT_ACTIVE
-                        mrd.flag_set_flow_or_step = 1
+    # ▶︎ 5-6-1 : ヨー軸センターリセットコマンドを格納
+                        if (mrd.flag_update_yaw > 0):
+                            mrd.flag_update_yaw -= 1
+                            mrd.s_meridim[0] = MCMD_UPDATE_YAW_CENTER
+                            if (mrd.flag_update_yaw == 0):
+                                print(
+                                    "Send COMMAND 'Set Yaw Center.':["+str(MCMD_UPDATE_YAW_CENTER)+"]")
 
-# ▶︎ 5-6-3 : ステップモード(PC側が周期制御を持つ)への切り替え
-                    if mrd.flag_set_flow_or_step == -2:
-                        mrd.s_meridim[0] = MCMD_BOARD_TRANSMIT_PASSIVE
-                        mrd.flag_set_flow_or_step = -1
+    # ▶︎ 5-6-2 : フローモード(ボード側が周期制御を持つ)への切り替え
+                        if mrd.flag_set_flow_or_step == 2:
+                            mrd.s_meridim[0] = MCMD_BOARD_TRANSMIT_ACTIVE
+                            mrd.flag_set_flow_or_step = 1
 
-# ▶︎ 5-6-4 : ボード側のフレーム管理時計を現在時間でリセット
-                    if mrd.frag_reset_cycle:
-                        mrd.s_meridim[0] = MCMD_RESET_MRD_TIMER
-                        mrd.frag_reset_cycle = False
+    # ▶︎ 5-6-3 : ステップモード(PC側が周期制御を持つ)への切り替え
+                        if mrd.flag_set_flow_or_step == -2:
+                            mrd.s_meridim[0] = MCMD_BOARD_TRANSMIT_PASSIVE
+                            mrd.flag_set_flow_or_step = -1
 
-# [ 5-7 ] : エラーフラグの処理
-# ▶︎ 5-7-1 : Meridim内のエラーフラグをリセット
-                    if mrd.frag_reset_errors:
-                        mrd.s_meridim[MSG_ERRS] = 0
-                        mrd.error_servo_id = "None"     # 受信エラーのあったサーボのIDを格納
-                        mrd.error_servo_id_past = "None"     # 受信エラーのあったサーボのIDを格納
-                        mrd.frag_reset_errors = False
+    # ▶︎ 5-6-4 : ボード側のフレーム管理時計を現在時間でリセット
+                        if mrd.frag_reset_cycle:
+                            mrd.s_meridim[0] = MCMD_RESET_MRD_TIMER
+                            mrd.frag_reset_cycle = False
 
-# ▶︎ 5-7-2 : キープしたエラーフラグを格納
-                    mrd.s_meridim[MSG_ERRS] = _temp_int16
+    # [ 5-7 ] : エラーフラグの処理
+    # ▶︎ 5-7-1 : Meridim内のエラーフラグをリセット
+                        if mrd.frag_reset_errors:
+                            mrd.s_meridim[MSG_ERRS] = 0
+                            mrd.error_servo_id = "None"     # 受信エラーのあったサーボのIDを格納
+                            mrd.error_servo_id_past = "None"     # 受信エラーのあったサーボのIDを格納
+                            mrd.frag_reset_errors = False
 
-# [ 5-8 ] : 送信用シーケンス番号の作成と格納
-                    mrd.frame_sync_s += 1  # 送信用のframe_sync_sをカウントアップ
-                    if mrd.frame_sync_s > 59999:  # 60,000以上ならゼロリセット
-                        mrd.frame_sync_s = 0
-                    if mrd.frame_sync_s > 32767:  # unsigned short として取り出せるようなsinged shortに変換
-                        mrd.s_meridim[1] = mrd.frame_sync_s-65536
-                    else:
-                        mrd.s_meridim[1] = mrd.frame_sync_s  # & 0xffff
+    # ▶︎ 5-7-2 : キープしたエラーフラグを格納
+                        mrd.s_meridim[MSG_ERRS] = _temp_int16
 
-# [ 5-9 ] : ミニターミナルからのデータ送信処理
-                    if mrd.flag_tarminal_mode_send > 0:  # ミニターミナルの送信モードの確認
-                        print_string = ""
-                        for i in range(8):
-                            if ((mrd.s_minitermnal_keep[i][0] >= 0) and (mrd.s_minitermnal_keep[i][0] < MSG_SIZE)):
-                                mrd.s_meridim[int(mrd.s_minitermnal_keep[i][0])] = int(
-                                    mrd.s_minitermnal_keep[i][1])
-                                print_string = print_string + \
-                                    "["+str(int(mrd.s_minitermnal_keep[i][0]))+"] " + \
-                                    str(int(mrd.s_minitermnal_keep[i][1]))+", "
-                                # サーボパワーオン時のキープ配列にも反映しておくこうするとミニターミナルから脱力してサーボを回転させた後にサーボパワーオンで位置の固定ができる
-                                mrd.s_meridim_motion_keep_f[int(mrd.s_minitermnal_keep[i][0])] = int(
-                                    mrd.s_minitermnal_keep[i][1]*0.01)
+    # [ 5-8 ] : 送信用シーケンス番号の作成と格納
+                        mrd.frame_sync_s += 1  # 送信用のframe_sync_sをカウントアップ
+                        if mrd.frame_sync_s > 59999:  # 60,000以上ならゼロリセット
+                            mrd.frame_sync_s = 0
+                        if mrd.frame_sync_s > 32767:  # unsigned short として取り出せるようなsinged shortに変換
+                            mrd.s_meridim[1] = mrd.frame_sync_s-65536
+                        else:
+                            mrd.s_meridim[1] = mrd.frame_sync_s  # & 0xffff
 
-                        if mrd.flag_tarminal_mode_send == 2:  # 送信データを一回表示
-                            print("Sending data : ")
-                            print(print_string[:-2])  # 末尾のカンマ以外を表示
-                            mrd.flag_tarminal_mode_send = 1
+    # [ 5-9 ] : ミニターミナルからのデータ送信処理
+                        if mrd.flag_tarminal_mode_send > 0:  # ミニターミナルの送信モードの確認
+                            print_string = ""
+                            for i in range(8):
+                                if ((mrd.s_minitermnal_keep[i][0] >= 0) and (mrd.s_minitermnal_keep[i][0] < MSG_SIZE)):
+                                    mrd.s_meridim[int(mrd.s_minitermnal_keep[i][0])] = int(
+                                        mrd.s_minitermnal_keep[i][1])
+                                    print_string = print_string + \
+                                        "["+str(int(mrd.s_minitermnal_keep[i][0]))+"] " + \
+                                        str(int(
+                                            mrd.s_minitermnal_keep[i][1]))+", "
+                                    # サーボパワーオン時のキープ配列にも反映しておくこうするとミニターミナルから脱力してサーボを回転させた後にサーボパワーオンで位置の固定ができる
+                                    mrd.s_meridim_motion_keep_f[int(mrd.s_minitermnal_keep[i][0])] = int(
+                                        mrd.s_minitermnal_keep[i][1]*0.01)
 
-                        if mrd.flag_send_miniterminal_data_once == 1:    # ミニターミナルの値を1回送信する
-                            mrd.flag_tarminal_mode_send = 0
-                            mrd.flag_send_miniterminal_data_once = 0
+                            if mrd.flag_tarminal_mode_send == 2:  # 送信データを一回表示
+                                print("Sending data : ")
+                                print(print_string[:-2])  # 末尾のカンマ以外を表示
+                                mrd.flag_tarminal_mode_send = 1
 
+                            if mrd.flag_send_miniterminal_data_once == 1:    # ミニターミナルの値を1回送信する
+                                mrd.flag_tarminal_mode_send = 0
+                                mrd.flag_send_miniterminal_data_once = 0
 
-# [ 5-10 ] : 格納した送信データについてチェックサムを追加
-                    s_meridim_int16 = np.array(
-                        mrd.s_meridim[:MSG_SIZE-1], dtype=np.int16)
-                    _checksum[0] = np.int16(
-                        ~np.sum(s_meridim_int16, dtype=np.int16))
-                    mrd.s_meridim[MSG_SIZE-1] = _checksum[0]
+    # [ 5-10 ] : 格納した送信データについてチェックサムを追加
+                        s_meridim_int16 = np.array(mrd.s_meridim[:MSG_SIZE-1], dtype=np.int16)
+                        _checksum[0] = np.int16(~np.sum(s_meridim_int16, dtype=np.int16))
+                        mrd.s_meridim[MSG_SIZE-1] = _checksum[0]
 
-# ------------------------------------------------------------------------
-# [ 6 ] : UDPデータを送信
-# ------------------------------------------------------------------------
-                    s_bin_data = struct.pack(
-                        '90h', *mrd.s_meridim)        # データをパック
-                    sock.sendto(s_bin_data, (UDP_SEND_IP,
-                                UDP_SEND_PORT))  # UDP送信
-                    now = time.time()-mrd.start+0.0001
+    # ------------------------------------------------------------------------
+    # [ 6 ] : UDPデータを送信
+    # ------------------------------------------------------------------------
+                        s_bin_data = struct.pack('90h', *mrd.s_meridim)        # データをパック
+                        sock.sendto(s_bin_data, (UDP_SEND_IP,UDP_SEND_PORT))  # UDP送信
+                        now = time.time()-mrd.start+0.0001
 
-# ------------------------------------------------------------------------
-# [ 7 ] : 表示処理
-# ------------------------------------------------------------------------
-# [ 7-1 ] : Axis monitor の表示データ切り替え
-                    # 1=target data(send data),0= actual data(received data)
-                    if mrd.flag_display_mode:
-                        # 送信データを表示用データに転記
-                        for i in range(MSG_SIZE-1):
-                            mrd.d_meridim[i] = mrd.s_meridim[i]
-                    else:
-                        # 受信データを表示用データに転記
-                        for i in range(MSG_SIZE-1):
-                            mrd.d_meridim[i] = mrd.r_meridim[i]
+    # ------------------------------------------------------------------------
+    # [ 7 ] : 表示処理
+    # ------------------------------------------------------------------------
+    # [ 7-1 ] : Axis monitor の表示データ切り替え
+                        # 1=target data(send data),0= actual data(received data)
+                        if mrd.flag_display_mode:
+                            # 送信データを表示用データに転記
+                            for i in range(MSG_SIZE-1):
+                                mrd.d_meridim[i] = mrd.s_meridim[i]
+                        else:
+                            # 受信データを表示用データに転記
+                            for i in range(MSG_SIZE-1):
+                                mrd.d_meridim[i] = mrd.r_meridim[i]
 
-# [ 7-2 ] : メッセージウィンドウの表示更新
-                    mrd.message2 = "ERROR COUNT ESP-PC:"+str("{:}".format(mrd.error_count_esp_to_pc)) + " PC-ESP:"+str("{:}".format(mrd.error_count_pc_to_esp))+" ESP-TSY:"+str(
-                        "{:}".format(mrd.error_count_esp_to_tsy)) + " TSY_Delay:"+str("{:}".format(mrd.error_count_tsy_delay)) + "    Servo_trouble:"+mrd.error_servo_id
+    # [ 7-2 ] : メッセージウィンドウの表示更新
+                        mrd.message2 = "ERROR COUNT ESP-PC:"+str("{:}".format(mrd.error_count_esp_to_pc)) + " PC-ESP:"+str("{:}".format(mrd.error_count_pc_to_esp))+" ESP-TSY:"+str(
+                            "{:}".format(mrd.error_count_esp_to_tsy)) + " TSY_Delay:"+str("{:}".format(mrd.error_count_tsy_delay)) + "    Servo_trouble:"+mrd.error_servo_id
 
-                    mrd.message3 = "ERROR RATE ESP-PC:"+str("{:.2%}".format(mrd.error_count_esp_to_pc/mrd.loop_count)) + " PC-ESP:"+str("{:.2%}".format(mrd.error_count_pc_to_esp/mrd.loop_count))+" ESP-TSY:"+str("{:.2%}".format(
-                        mrd.error_count_esp_to_tsy/mrd.loop_count)) + " TsySKIP:"+str("{:.2%}".format(mrd.error_count_tsy_skip/mrd.loop_count)) + " ESPSKIP:" + str("{:.2%}".format(mrd.error_count_esp_skip/mrd.loop_count))
+                        mrd.message3 = "ERROR RATE ESP-PC:"+str("{:.2%}".format(mrd.error_count_esp_to_pc/mrd.loop_count)) + " PC-ESP:"+str("{:.2%}".format(mrd.error_count_pc_to_esp/mrd.loop_count))+" ESP-TSY:"+str("{:.2%}".format(
+                            mrd.error_count_esp_to_tsy/mrd.loop_count)) + " TsySKIP:"+str("{:.2%}".format(mrd.error_count_tsy_skip/mrd.loop_count)) + " ESPSKIP:" + str("{:.2%}".format(mrd.error_count_esp_skip/mrd.loop_count))
 
-                    mrd.message4 = "SKIP COUNT Tsy:" + str("{:}".format(mrd.error_count_tsy_skip))+" ESP:"+str("{:}".format(mrd.error_count_esp_skip))+" PC:"+str("{:}".format(mrd.error_count_pc_skip)) + " Servo:"+str(
-                        "{:}".format(mrd.error_count_servo_skip))+" PCframe:"+str(mrd.loop_count)+" BOARDframe:"+str(mrd.frame_sync_r_resv)+" "+str(int(mrd.loop_count/now))+"Hz"
+                        mrd.message4 = "SKIP COUNT Tsy:" + str("{:}".format(mrd.error_count_tsy_skip))+" ESP:"+str("{:}".format(mrd.error_count_esp_skip))+" PC:"+str("{:}".format(mrd.error_count_pc_skip)) + " Servo:"+str(
+                            "{:}".format(mrd.error_count_servo_skip))+" PCframe:"+str(mrd.loop_count)+" BOARDframe:"+str(mrd.frame_sync_r_resv)+" "+str(int(mrd.loop_count/now))+"Hz"
 
-                    # 今回受信のシーケンス番号を次回比較用にキープ
-                    mrd.frame_sync_r_last = mrd.frame_sync_r_resv
+                        # 今回受信のシーケンス番号を次回比較用にキープ
+                        mrd.frame_sync_r_last = mrd.frame_sync_r_resv
 
 # ------------------------------------------------------------------------
 # [ 8 ] : シーケンス番号が更新されていなければ待機して[1-1]]に戻る
@@ -1329,7 +1300,7 @@ def set_tarminal_continuous_on(sender, app_data):  # ボタン押下でset_flow�
             # 該当しないデータにはインデックスに-1を指定して送信データに反映されないようにしておく
             mrd.s_minitermnal_keep[i][0] = -1
             # 該当しないデータにはインデックスに-1を指定して送信データに反映されないようにしておく
-            mrd.s_minitermnal_keep[i][1] = 0
+            # mrd.s_minitermnal_keep[i][1] = 0
 
 
 # [Mini Terminal] ウィンドウのSendボタン処理
@@ -1408,13 +1379,13 @@ def main():
             with dpg.group(label='RightSide'):
                 for i in range(0, 15, 1):
                     dpg.add_slider_float(default_value=0, tag="ID R"+str(i), label="R"+str(i),
-                                         max_value=100, min_value=-100, callback=set_servo_angle,
+                                         max_value=180, min_value=-180, callback=set_servo_angle,
                                          pos=[10, 35+i*20], width=80)
 
             with dpg.group(label='LeftSide'):
                 for i in range(0, 15, 1):
                     dpg.add_slider_float(default_value=0, tag="ID L"+str(i), label="L"+str(i),
-                                         max_value=100, min_value=-100, callback=set_servo_angle,
+                                         max_value=180, min_value=-180, callback=set_servo_angle,
                                          pos=[135, 35+i*20], width=80)
 
             dpg.add_button(label="Home", callback=set_servo_home, pos=[
@@ -1432,15 +1403,11 @@ def main():
         with dpg.window(label="Messege", width=590, height=155, pos=[5, 380]):
 
             dpg.add_text("disp_send ", pos=[383, 53])
-            dpg.add_checkbox(
-                tag="disp_send", callback=set_disp_send, pos=[452, 53])
+            dpg.add_checkbox(tag="disp_send", callback=set_disp_send, pos=[452, 53])
             dpg.add_text("disp_rcvd ", pos=[483, 53])
-            dpg.add_checkbox(
-                tag="disp_rcvd", callback=set_disp_rcvd, pos=[551, 53])
-            dpg.add_button(label="ResetCycle",
-                           callback=reset_cycle, width=80, pos=[390, 28])
-            dpg.add_button(label="ResetCounter",
-                           callback=reset_counter, width=90, pos=[480, 28])
+            dpg.add_checkbox(tag="disp_rcvd", callback=set_disp_rcvd, pos=[551, 53])
+            dpg.add_button(label="ResetCycle", callback=reset_cycle, width=80, pos=[390, 28])
+            dpg.add_button(label="ResetCounter", callback=reset_counter, width=90, pos=[480, 28])
             dpg.add_text(mrd.message0, tag="DispMessage0")
             dpg.add_text(mrd.message1, tag="DispMessage1")
             dpg.add_text(mrd.message2, tag="DispMessage2")
@@ -1504,8 +1471,7 @@ def main():
             dpg.add_checkbox(tag="Redis", callback=redis_sub, pos=[270, 104])
             dpg.add_text("<- Redis", pos=[210, 104])
 
-            dpg.add_checkbox(
-                tag="ros1_output_mode", callback=change_ros1_output_mode, user_data=1, pos=[305, 62])
+            dpg.add_checkbox(tag="ros1_output_mode", callback=change_ros1_output_mode, user_data=1, pos=[305, 62])
             dpg.add_text("targ/rcvd", pos=[236, 62])
 
             dpg.draw_rectangle(pmin=[80, -4], pmax=[190, 95], color=(
@@ -1532,34 +1498,20 @@ def main():
 # [ Button Input ] : リモコン入力コンパネ用ウィンドウ（表示位置:上段/右側）
 # ------------------------------------------------------------------------
         with dpg.window(label="Button Input", width=248, height=155, pos=[600, 5]):
-            dpg.add_checkbox(
-                tag="Btn_L2", callback=pad_btn_panel_on, user_data=256, pos=[15, 38])
-            dpg.add_checkbox(
-                tag="Btn_L1", callback=pad_btn_panel_on, user_data=1024, pos=[15, 60])
-            dpg.add_checkbox(
-                tag="Btn_L_UP", callback=pad_btn_panel_on, user_data=16, pos=[42, 80])
-            dpg.add_checkbox(
-                tag="Btn_L_DOWN", callback=pad_btn_panel_on, user_data=64, pos=[42, 124])
-            dpg.add_checkbox(
-                tag="Btn_L_LEFT", callback=pad_btn_panel_on, user_data=128, pos=[20, 102])
-            dpg.add_checkbox(
-                tag="Btn_L_RIGHT", callback=pad_btn_panel_on, user_data=32, pos=[64, 102])
-            dpg.add_checkbox(
-                tag="Btn_SELECT", callback=pad_btn_panel_on, user_data=1, pos=[100, 102])
-            dpg.add_checkbox(
-                tag="Btn_START", callback=pad_btn_panel_on, user_data=8, pos=[130, 102])
-            dpg.add_checkbox(
-                tag="Btn_R2", callback=pad_btn_panel_on, user_data=512, pos=[215, 38])
-            dpg.add_checkbox(
-                tag="Btn_R1", callback=pad_btn_panel_on, user_data=2048, pos=[215, 60])
-            dpg.add_checkbox(
-                tag="Btn_R_UP", callback=pad_btn_panel_on, user_data=4096, pos=[188, 80])
-            dpg.add_checkbox(
-                tag="Btn_R_DOWN", callback=pad_btn_panel_on, user_data=16384, pos=[188, 124])
-            dpg.add_checkbox(
-                tag="Btn_R_LEFT", callback=pad_btn_panel_on, user_data=32768, pos=[166, 102])
-            dpg.add_checkbox(
-                tag="Btn_R_RIGHT", callback=pad_btn_panel_on, user_data=8192, pos=[210, 102])
+            dpg.add_checkbox(tag="Btn_L2",      callback=pad_btn_panel_on, user_data=256, pos=[15, 38])
+            dpg.add_checkbox(tag="Btn_L1",      callback=pad_btn_panel_on, user_data=1024, pos=[15, 60])
+            dpg.add_checkbox(tag="Btn_L_UP",    callback=pad_btn_panel_on, user_data=16, pos=[42, 80])
+            dpg.add_checkbox(tag="Btn_L_DOWN",  callback=pad_btn_panel_on, user_data=64, pos=[42, 124])
+            dpg.add_checkbox(tag="Btn_L_LEFT",  callback=pad_btn_panel_on, user_data=128, pos=[20, 102])
+            dpg.add_checkbox(tag="Btn_L_RIGHT", callback=pad_btn_panel_on, user_data=32, pos=[64, 102])
+            dpg.add_checkbox(tag="Btn_SELECT",  callback=pad_btn_panel_on, user_data=1, pos=[100, 102])
+            dpg.add_checkbox(tag="Btn_START",   callback=pad_btn_panel_on, user_data=8, pos=[130, 102])
+            dpg.add_checkbox(tag="Btn_R2",      callback=pad_btn_panel_on, user_data=512, pos=[215, 38])
+            dpg.add_checkbox(tag="Btn_R1",      callback=pad_btn_panel_on, user_data=2048, pos=[215, 60])
+            dpg.add_checkbox(tag="Btn_R_UP",    callback=pad_btn_panel_on, user_data=4096, pos=[188, 80])
+            dpg.add_checkbox(tag="Btn_R_DOWN",  callback=pad_btn_panel_on, user_data=16384, pos=[188, 124])
+            dpg.add_checkbox(tag="Btn_R_LEFT",  callback=pad_btn_panel_on, user_data=32768, pos=[166, 102])
+            dpg.add_checkbox(tag="Btn_R_RIGHT", callback=pad_btn_panel_on, user_data=8192, pos=[210, 102])
 
 # ------------------------------------------------------------------------
 # [ Mini Terminal ] : コマンド送信用ミニターミナル（表示位置:中段/右側）
@@ -1568,51 +1520,31 @@ def main():
             # with dpg.group(label='LeftSide'):
             dpg.add_text("Index", pos=[15, 25])
             dpg.add_text("Data", pos=[60, 25])
-            dpg.add_input_text(tag="s_index0", decimal=True,
-                               default_value="0", width=40, pos=[15, 45])
-            dpg.add_input_text(tag="s_data0", decimal=True, default_value=str(
-                MSG_SIZE), width=60, pos=[60, 45])
-            dpg.add_input_text(tag="s_index1", decimal=True,
-                               default_value="", width=40, pos=[15, 70])
-            dpg.add_input_text(tag="s_data1", decimal=True,
-                               default_value="", width=60, pos=[60, 70])
-            dpg.add_input_text(tag="s_index2", decimal=True,
-                               default_value="", width=40, pos=[15, 95])
-            dpg.add_input_text(tag="s_data2", decimal=True,
-                               default_value="", width=60, pos=[60, 95])
-            dpg.add_input_text(tag="s_index3", decimal=True,
-                               default_value="", width=40, pos=[15, 120])
-            dpg.add_input_text(tag="s_data3", decimal=True,
-                               default_value="", width=60, pos=[60, 120])
+            dpg.add_input_text(tag="s_index0", decimal=True, default_value="0", width=40, pos=[15, 45])
+            dpg.add_input_text(tag="s_data0",  decimal=True, default_value=str(MSG_SIZE), width=60, pos=[60, 45])
+            dpg.add_input_text(tag="s_index1", decimal=True, default_value="", width=40, pos=[15, 70])
+            dpg.add_input_text(tag="s_data1",  decimal=True, default_value="", width=60, pos=[60, 70])
+            dpg.add_input_text(tag="s_index2", decimal=True, default_value="", width=40, pos=[15, 95])
+            dpg.add_input_text(tag="s_data2",  decimal=True, default_value="", width=60, pos=[60, 95])
+            dpg.add_input_text(tag="s_index3", decimal=True, default_value="", width=40, pos=[15, 120])
+            dpg.add_input_text(tag="s_data3",  decimal=True, default_value="", width=60, pos=[60, 120])
             dpg.add_text("Index", pos=[130, 25])
             dpg.add_text("Data", pos=[175, 25])
-            dpg.add_input_text(tag="s_index4", decimal=True,
-                               default_value="", width=40, pos=[130, 45])
-            dpg.add_input_text(tag="s_data4", decimal=True,
-                               default_value="", width=60, pos=[175, 45])
-            dpg.add_input_text(tag="s_index5", decimal=True,
-                               default_value="", width=40, pos=[130, 70])
-            dpg.add_input_text(tag="s_data5", decimal=True,
-                               default_value="", width=60, pos=[175, 70])
-            dpg.add_input_text(tag="s_index6", decimal=True,
-                               default_value="", width=40, pos=[130, 95])
-            dpg.add_input_text(tag="s_data6", decimal=True,
-                               default_value="", width=60, pos=[175, 95])
-            dpg.add_input_text(tag="s_index7", decimal=True,
-                               default_value="", width=40, pos=[130, 120])
-            dpg.add_input_text(tag="s_data7", decimal=True,
-                               default_value="", width=60, pos=[175, 120])
-            dpg.add_button(
-                label="Set", callback=set_miniterminal_data, pos=[136, 148])
-            dpg.add_button(
-                label="Set&Send", callback=set_and_send_miniterminal_data, pos=[171, 148])
+            dpg.add_input_text(tag="s_index4", decimal=True, default_value="", width=40, pos=[130, 45])
+            dpg.add_input_text(tag="s_data4",  decimal=True, default_value="", width=60, pos=[175, 45])
+            dpg.add_input_text(tag="s_index5", decimal=True, default_value="", width=40, pos=[130, 70])
+            dpg.add_input_text(tag="s_data5",  decimal=True, default_value="", width=60, pos=[175, 70])
+            dpg.add_input_text(tag="s_index6", decimal=True, default_value="", width=40, pos=[130, 95])
+            dpg.add_input_text(tag="s_data6",  decimal=True, default_value="", width=60, pos=[175, 95])
+            dpg.add_input_text(tag="s_index7", decimal=True, default_value="", width=40, pos=[130, 120])
+            dpg.add_input_text(tag="s_data7",  decimal=True, default_value="", width=60, pos=[175, 120])
+            dpg.add_button(label="Set", callback=set_miniterminal_data, pos=[136, 148])
+            dpg.add_button(label="Set&Send", callback=set_and_send_miniterminal_data, pos=[171, 148])
             dpg.add_text("Continuous ", pos=[140, 175])
-            dpg.add_checkbox(tag="SendContinuously",
-                             callback=set_tarminal_continuous_on, pos=[215, 175])
-            dpg.add_radio_button(["Flow", "Step"], tag="transaction_mode", pos=[
-                                 10, 148], callback=set_transaction_mode, default_value="Flow", horizontal=True)
-            dpg.add_button(label=" Next frame ", pos=[
-                           15, 175], callback=send_data_step_frame)  # 右下に設置
+            dpg.add_checkbox(tag="SendContinuously", callback=set_tarminal_continuous_on, pos=[215, 175])
+            dpg.add_radio_button(["Flow", "Step"], tag="transaction_mode", pos=[10, 148], 
+                                 callback=set_transaction_mode, default_value="Flow", horizontal=True)
+            dpg.add_button(label=" Next frame ", pos=[15, 175], callback=send_data_step_frame)  # 右下に設置
 
 # dpg描画処理2 =========================================================
         with dpg.value_registry():  # dpg変数値の登録
@@ -1678,33 +1610,35 @@ def main():
                     js_meridim = JointState()
                     js_meridim.header.stamp = rospy.Time.now()
                     js_meridim.name =\
-                        ['c_head_yaw',                      'l_shoulder_pitch',                'l_shoulder_roll',                  'l_elbow_yaw',
-                         'l_elbow_pitch',                 'l_hipjoint_yaw',                  'l_hipjoint_roll',                  'l_hipjoint_pitch',
-                         'l_knee_pitch',              'l_ankle_pitch',                   'l_ankle_roll',
-                         'c_chest_yaw',            'r_shoulder_pitch',                'r_shoulder_roll',                  'r_elbow_yaw',
-                         'r_elbow_pitch',     'r_hipjoint_yaw',                  'r_hipjoint_roll',                  'r_hipjoint_pitch',
-                         'r_knee_pitch',  'r_ankle_pitch',                   'r_ankle_roll']
+                        ['c_head_yaw',   'l_shoulder_pitch', 'l_shoulder_roll', 'l_elbow_yaw',
+                         'l_elbow_pitch','l_hipjoint_yaw',   'l_hipjoint_roll', 'l_hipjoint_pitch',
+                         'l_knee_pitch', 'l_ankle_pitch',    'l_ankle_roll',
+                         'c_chest_yaw',  'r_shoulder_pitch', 'r_shoulder_roll', 'r_elbow_yaw',
+                         'r_elbow_pitch','r_hipjoint_yaw',   'r_hipjoint_roll', 'r_hipjoint_pitch',
+                         'r_knee_pitch', 'r_ankle_pitch',    'r_ankle_roll']
                     js_meridim.position = \
-                        [math.radians(mrd.s_meridim_motion_f[21]/100*mrd.jspn[0]), math.radians(mrd.s_meridim_motion_f[23]/100*mrd.jspn[1]),
-                         math.radians(mrd.s_meridim_motion_f[25]/100)*mrd.jspn[2], math.radians(
-                             mrd.s_meridim_motion_f[27]/100*mrd.jspn[3]),
-                         math.radians(mrd.s_meridim_motion_f[29]/100*mrd.jspn[4]), math.radians(
-                             mrd.s_meridim_motion_f[31]/100*mrd.jspn[5]),
-                         math.radians(mrd.s_meridim_motion_f[33]/100*mrd.jspn[6]), math.radians(
-                             mrd.s_meridim_motion_f[35]/100*mrd.jspn[7]),
-                         math.radians(mrd.s_meridim_motion_f[37]/100*mrd.jspn[8]), math.radians(
-                             mrd.s_meridim_motion_f[39]/100*mrd.jspn[9]),
-                         math.radians(mrd.s_meridim_motion_f[41]/100*mrd.jspn[10]), math.radians(
-                             mrd.s_meridim_motion_f[51]/100*mrd.jspn[15]),
-                         math.radians(mrd.s_meridim_motion_f[53]/100*mrd.jspn[16]), math.radians(
-                             mrd.s_meridim_motion_f[55]/100*mrd.jspn[17]),
-                         math.radians(mrd.s_meridim_motion_f[57]/100*mrd.jspn[18]), math.radians(
-                             mrd.s_meridim_motion_f[59]/100*mrd.jspn[19]),
-                         math.radians(mrd.s_meridim_motion_f[61]/100*mrd.jspn[20]), math.radians(
-                             mrd.s_meridim_motion_f[63]/100*mrd.jspn[21]),
-                         math.radians(mrd.s_meridim_motion_f[65]/100*mrd.jspn[22]), math.radians(
-                             mrd.s_meridim_motion_f[67]/100*mrd.jspn[23]),
-                         math.radians(mrd.s_meridim_motion_f[69]/100*mrd.jspn[24]), math.radians(mrd.s_meridim_motion_f[71]/100*mrd.jspn[25])]
+                        [math.radians(mrd.s_meridim_motion_f[21]/100*mrd.jspn[0]), 
+                         math.radians(mrd.s_meridim_motion_f[23]/100*mrd.jspn[1]),
+                         math.radians(mrd.s_meridim_motion_f[25]/100)*mrd.jspn[2], 
+                         math.radians(mrd.s_meridim_motion_f[27]/100*mrd.jspn[3]),
+                         math.radians(mrd.s_meridim_motion_f[29]/100*mrd.jspn[4]), 
+                         math.radians(mrd.s_meridim_motion_f[31]/100*mrd.jspn[5]),
+                         math.radians(mrd.s_meridim_motion_f[33]/100*mrd.jspn[6]), 
+                         math.radians(mrd.s_meridim_motion_f[35]/100*mrd.jspn[7]),
+                         math.radians(mrd.s_meridim_motion_f[37]/100*mrd.jspn[8]), 
+                         math.radians(mrd.s_meridim_motion_f[39]/100*mrd.jspn[9]),
+                         math.radians(mrd.s_meridim_motion_f[41]/100*mrd.jspn[10]), 
+                         math.radians(mrd.s_meridim_motion_f[51]/100*mrd.jspn[15]),
+                         math.radians(mrd.s_meridim_motion_f[53]/100*mrd.jspn[16]), 
+                         math.radians(mrd.s_meridim_motion_f[55]/100*mrd.jspn[17]),
+                         math.radians(mrd.s_meridim_motion_f[57]/100*mrd.jspn[18]), 
+                         math.radians(mrd.s_meridim_motion_f[59]/100*mrd.jspn[19]),
+                         math.radians(mrd.s_meridim_motion_f[61]/100*mrd.jspn[20]), 
+                         math.radians(mrd.s_meridim_motion_f[63]/100*mrd.jspn[21]),
+                         math.radians(mrd.s_meridim_motion_f[65]/100*mrd.jspn[22]), 
+                         math.radians(mrd.s_meridim_motion_f[67]/100*mrd.jspn[23]),
+                         math.radians(mrd.s_meridim_motion_f[69]/100*mrd.jspn[24]), 
+                         math.radians(mrd.s_meridim_motion_f[71]/100*mrd.jspn[25])]
 
                     js_meridim.velocity = []
                     # js_meridim.velocity = [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]
