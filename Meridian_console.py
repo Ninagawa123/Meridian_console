@@ -195,7 +195,14 @@ class MeridianConsole:
         self.flag_disp_send = 0                   # ターミナルに送信データを表示する
         self.flag_disp_rcvd = 0                   # ターミナルに受信データを表示する
         self.flag_trim_window_open = False        # Trimウィンドウの表示状態を管理
-
+        self.servo_direction_flags = {}           # サーボの回転方向フラグ配列（False=正回転、True=逆回転）
+        # 右側サーボの初期化
+        for i in range(15):
+            self.servo_direction_flags[f"R{i}"] = False  # 初期値は正回転（チェックなし）
+        # 左側サーボの初期化
+        for i in range(15):
+            self.servo_direction_flags[f"L{i}"] = False  # 初期値は正回転（チェックなし）
+            
         # メッセージ表示用
         self.message0 = "This PC's IP adress is "+get_local_ip()
         self.message1 = ""
@@ -486,6 +493,21 @@ def load_from_eeprom_to_console():
 
     print("Command sent: Load from EEPROM[1][*] to Console (10201)")
 
+
+# サーボの回転方向フラグを切り替えるコールバック関数
+def toggle_servo_direction(sender, app_data, user_data):
+    servo_id = user_data  # user_dataからサーボID（例："R0"や"L3"）を取得
+    
+    # フラグの値を更新
+    mrd.servo_direction_flags[servo_id] = app_data
+    
+    # チェック時は逆回転、非チェック時は正回転
+    print(f"Servo {servo_id} direction set to {'REVERSE' if app_data else 'NORMAL'}")
+        
+    # この値はボード側で読み取られるためだけのもので、
+    # このPythonプログラム内でのサーボ制御には影響を与えない
+
+
 # Trim Setting ウィンドウを作成する関数
 def create_trim_window():
     # ビューポートのサイズを取得して、ウィンドウサイズを決定
@@ -531,14 +553,23 @@ def create_trim_window():
         dpg.add_button(label="Load from EEPROM to Console", callback=load_from_eeprom_to_console,
                        pos=[viewport_width//2+183, 65], width=200)
 
+        # 「Reverse」の意味を説明するテキストを追加
+        dpg.add_text("Reverse", pos=[viewport_width//4-150, 90])
+        dpg.add_text("Reverse", pos=[viewport_width*6//9-150, 90])
+
         # 右側のサーボのトリム設定
         dpg.add_text("Right Side Servos", pos=[viewport_width//4-75, 90])
 
         for i in range(0, 15, 1):
             # Axis Monitorの現在値を取得して初期値に設定
             current_value = dpg.get_value(f"ID R{i}")
-
-            # スライダー
+            
+            # 回転方向のチェックボックス（追加部分）
+            dpg.add_checkbox(tag=f"Direction_R{i}", default_value=mrd.servo_direction_flags[f"R{i}"],
+                             callback=toggle_servo_direction, user_data=f"R{i}",
+                             pos=[viewport_width//4-140, 120+i*25])
+            
+            # スライダー（位置調整）
             dpg.add_slider_float(default_value=current_value, tag=f"Trim_R{i}", label=f"R{i}",
                                  max_value=180, min_value=-180, 
                                  pos=[viewport_width//4-100, 120+i*25], width=160,
@@ -558,7 +589,12 @@ def create_trim_window():
         for i in range(0, 15, 1):
             # Axis Monitorの現在値を取得して初期値に設定
             current_value = dpg.get_value(f"ID L{i}")
-
+            
+            # 回転方向のチェックボックス（追加部分）
+            dpg.add_checkbox(tag=f"Direction_L{i}", default_value=mrd.servo_direction_flags[f"L{i}"],
+                             callback=toggle_servo_direction, user_data=f"L{i}",
+                             pos=[viewport_width*6//9-140, 120+i*25])
+            
             # スライダー
             dpg.add_slider_float(default_value=current_value, tag=f"Trim_L{i}", label=f"L{i}",
                                  max_value=180, min_value=-180,
