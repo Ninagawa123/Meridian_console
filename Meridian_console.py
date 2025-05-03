@@ -834,132 +834,311 @@ def start_trim_setting():
     mrd.flag_special_command_send = 1
     
     print("Command sent: Start Trim Setting Mode (10100)")
-    
+
+
+
             
 # Trim Setting ウィンドウを作成する関数
+# def create_trim_window():
+#     # ビューポートのサイズを取得して、ウィンドウサイズを決定
+#     viewport_width = dpg.get_viewport_width()
+#     viewport_height = dpg.get_viewport_height()
+
+#     with dpg.window(label="Trim Setting", tag="Trim Setting",
+#                     width=viewport_width-20, height=530,
+#                     pos=[10, 10], on_close=close_trim_window):
+
+#         # コントロールエリア
+#         # Command側のチェックボックスの状態を取得して初期値に設定
+#         power_state = dpg.get_value("Power")
+#         python_state = dpg.get_value("python")
+#         enable_state = dpg.get_value("Enable")
+
+#         # Start Trim Settingボタンを追加
+#         dpg.add_button(label="Start Trim Setting", callback=start_trim_setting, 
+#                        pos=[15, 40], width=140)
+
+#         # Homeボタンを追加（Axis Monitorと同じ機能）
+#         dpg.add_button(label="Home", callback=set_trim_home, pos=[viewport_width//2-260, 40], width=40)
+
+#         # Powerチェックボックス
+#         dpg.add_checkbox(label="Power", tag="Power_Trim", callback=sync_power_from_trim,
+#                          default_value=power_state, pos=[viewport_width//2-190, 40])
+
+#         # Pythonチェックボックス
+#         dpg.add_checkbox(label="Python", tag="Python_Trim", callback=sync_python_from_trim,
+#                          default_value=python_state, pos=[viewport_width//2-110, 40])
+
+#         # Enableチェックボックス
+#         dpg.add_checkbox(label="Enable", tag="Enable_Trim", callback=sync_enable_from_trim,
+#                          default_value=enable_state, pos=[viewport_width//2-40, 40])
+
+#         # EEPROMボタンを追加
+#         dpg.add_button(label="Save to EEPROM", callback=save_trimdata_to_eeprom,
+#                        pos=[viewport_width//2+45, 40], width=125)
+
+#         dpg.add_button(label="Load from EEPROM to Board  ", callback=load_trimdata_from_eeprom_to_board,
+#                        pos=[viewport_width//2+183, 40], width=200)
+
+#         dpg.add_button(label="Load from EEPROM to Console", callback=load_from_eeprom_to_console,
+#                        pos=[viewport_width//2+183, 65], width=200)
+
+
+#         STEP_TAG = "TrimStep"
+
+#         # 例: ウィンドウ左下に配置（X, Y はお好みで）
+#         # dpg.add_input_float(label="step", tag=STEP_TAG,
+#         #                     default_value=1.0, width=70,
+#         #                     pos=[20, viewport_height-80],
+#         #                     format="%.2f")
+        
+#         dpg.add_input_float(label="step", tag=STEP_TAG,
+#                             default_value=1.0, width=70,
+#                             pos=[20, viewport_height-80],
+#                             format="%.2f", step=0.1,# ↑↓キーで 0.1 ずつ
+#                             min_value=0.0, min_clamped=True)
+
+
+#         trim_window_left_block = viewport_width*7//25
+
+#         # 「ヘッダー」の追加
+#         dpg.add_text("Idx", pos=[trim_window_left_block-185, 90])
+#         dpg.add_text("Mt", pos=[trim_window_left_block-157, 90])
+#         dpg.add_text("ID", pos=[trim_window_left_block-125, 90])
+#         dpg.add_text("Rev", pos=[trim_window_left_block-90, 90])
+#         dpg.add_text("Right Side Servos", pos=[trim_window_left_block-30, 90])
+
+#         # 右側のサーボのトリム設定
+#         for i in range(0, MRD_SERVO_SLOTS, 1):
+#             # インデックス番号を表示（変更不可）
+#             dpg.add_text(f"{i}", pos=[trim_window_left_block-180, 120+i*25])
+            
+#             # マウントチェックボックス
+#             dpg.add_checkbox(tag=f"Mount_R{i}", default_value=mrd.servo_mount[f"R{i}"],
+#                              callback=toggle_servo_mount, user_data=f"R{i}", pos=[trim_window_left_block-160, 120+i*25])
+            
+#             # サーボID入力フィールド
+#             dpg.add_input_text(tag=f"ID_R{i}", default_value=str(mrd.servo_id_values[f"R{i}"]),
+#                                width=30, callback=set_servo_id, user_data=f"R{i}", pos=[trim_window_left_block-130, 120+i*25])
+            
+#             # 回転方向のチェックボックス
+#             dpg.add_checkbox(tag=f"Direction_R{i}", default_value=mrd.servo_direction[f"R{i}"],
+#                              callback=toggle_servo_direction, user_data=f"R{i}", pos=[trim_window_left_block-90, 120+i*25])
+            
+#             # スライダー（位置調整）
+#             dpg.add_slider_float(default_value=dpg.get_value(f"ID R{i}"), tag=f"Trim_R{i}", label=f"R{i}",
+#                                  max_value=180, min_value=-180, pos=[trim_window_left_block-60, 120+i*25], width=120,
+#                                  callback=set_servo_angle_from_trim)
+
+#             # インプットフィールド
+#             dpg.add_input_text(tag=f"Input_Trim_R{i}", decimal=True, width=50, pos=[trim_window_left_block+65, 120+i*25])
+
+#             # エンターボタン
+#             dpg.add_button(label="Enter", tag=f"Enter_Trim_R{i}", callback=apply_trim_input_value, user_data=f"R{i}",
+#                            width=42, pos=[trim_window_left_block+120, 120+i*25])
+            
+#         trim_window_right_block = viewport_width*18//25
+        
+#         # 左側のヘッダー
+#         dpg.add_text("Idx", pos=[trim_window_right_block-185, 90])
+#         dpg.add_text("Mt", pos=[trim_window_right_block-157, 90])
+#         dpg.add_text("ID", pos=[trim_window_right_block-125, 90])
+#         dpg.add_text("Rev", pos=[trim_window_right_block-90, 90])
+#         dpg.add_text("Left Side Servos", pos=[trim_window_right_block-10, 90])
+        
+#         # 左側のサーボのトリム設定
+#         for i in range(0, MRD_SERVO_SLOTS, 1):
+#             # インデックス番号を表示（変更不可）
+#             dpg.add_text(f"{i}", pos=[trim_window_right_block-180, 120+i*25])
+            
+#             # マウントチェックボックス
+#             dpg.add_checkbox(tag=f"Mount_L{i}", default_value=mrd.servo_mount[f"L{i}"],
+#                              callback=toggle_servo_mount, user_data=f"L{i}", pos=[trim_window_right_block-160, 120+i*25])
+            
+#             # サーボID入力フィールド
+#             dpg.add_input_text(tag=f"ID_L{i}", default_value=str(mrd.servo_id_values[f"L{i}"]),
+#                                width=30, callback=set_servo_id, user_data=f"L{i}", pos=[trim_window_right_block-130, 120+i*25])
+            
+#             # 回転方向のチェックボックス
+#             dpg.add_checkbox(tag=f"Direction_L{i}", default_value=mrd.servo_direction[f"L{i}"],
+#                              callback=toggle_servo_direction, user_data=f"L{i}", pos=[trim_window_right_block-90, 120+i*25])
+            
+#             # スライダー
+#             dpg.add_slider_float(default_value=dpg.get_value(f"ID L{i}"), tag=f"Trim_L{i}", label=f"L{i}",
+#                                  max_value=180, min_value=-180, pos=[trim_window_right_block-60, 120+i*25], width=120,
+#                                  callback=set_servo_angle_from_trim)
+
+#             # インプットフィールド
+#             dpg.add_input_text(tag=f"Input_Trim_L{i}", decimal=True, width=50, pos=[trim_window_right_block+65, 120+i*25])
+
+#             # エンターボタン
+#             dpg.add_button(label="Enter", tag=f"Enter_Trim_L{i}", callback=apply_trim_input_value, user_data=f"L{i}",
+#                            width=42, pos=[trim_window_right_block+120, 120+i*25])
+
+#         # 閉じるボタンを最下部に配置
+#         dpg.add_button(label="Close", callback=close_trim_window, width=100, pos=[viewport_width//2-50, viewport_height-80])
+
+STEP_TAG = "TrimStep"        # ステップ入力フィールド用タグ
+
+# Trim Setting ウィンドウを作成する関数（最新版）
 def create_trim_window():
-    # ビューポートのサイズを取得して、ウィンドウサイズを決定
-    viewport_width = dpg.get_viewport_width()
+    
+    #MRD_SERVO_SLOTS = 15         # サーボスロット数（0–14）
+    
+    # ビューポートサイズ取得
+    viewport_width  = dpg.get_viewport_width()
     viewport_height = dpg.get_viewport_height()
 
+    # ブロック基準位置（画面幅に対する 7/25, 18/25 の比率を採用）
+    trim_window_left_block  = viewport_width * 7 // 30   # 右サーボ列（R）
+    trim_window_right_block = viewport_width * 21 // 30  # 左サーボ列（L）
+
     with dpg.window(label="Trim Setting", tag="Trim Setting",
-                    width=viewport_width-20, height=530,
+                    width=viewport_width-20, height=viewport_height-20,
                     pos=[10, 10], on_close=close_trim_window):
 
-        # コントロールエリア
-        # Command側のチェックボックスの状態を取得して初期値に設定
-        power_state = dpg.get_value("Power")
+        # --- 上部コントロールエリア -------------------------------------------------
+        power_state  = dpg.get_value("Power")
         python_state = dpg.get_value("python")
         enable_state = dpg.get_value("Enable")
 
-        # Start Trim Settingボタンを追加
-        dpg.add_button(label="Start Trim Setting", callback=start_trim_setting, 
+        dpg.add_button(label="Start Trim Setting", callback=start_trim_setting,
                        pos=[15, 40], width=140)
+        dpg.add_button(label="Home", callback=set_trim_home,
+                       pos=[viewport_width//2-260, 40], width=40)
 
-        # Homeボタンを追加（Axis Monitorと同じ機能）
-        dpg.add_button(label="Home", callback=set_trim_home, pos=[viewport_width//2-260, 40], width=40)
+        dpg.add_checkbox(label="Power",  tag="Power_Trim",
+                         default_value=power_state,  pos=[viewport_width//2-190, 40],
+                         callback=sync_power_from_trim)
+        dpg.add_checkbox(label="Python", tag="Python_Trim",
+                         default_value=python_state, pos=[viewport_width//2-110, 40],
+                         callback=sync_python_from_trim)
+        dpg.add_checkbox(label="Enable", tag="Enable_Trim",
+                         default_value=enable_state, pos=[viewport_width//2-40, 40],
+                         callback=sync_enable_from_trim)
 
-        # Powerチェックボックス
-        dpg.add_checkbox(label="Power", tag="Power_Trim", callback=sync_power_from_trim,
-                         default_value=power_state, pos=[viewport_width//2-190, 40])
-
-        # Pythonチェックボックス
-        dpg.add_checkbox(label="Python", tag="Python_Trim", callback=sync_python_from_trim,
-                         default_value=python_state, pos=[viewport_width//2-110, 40])
-
-        # Enableチェックボックス
-        dpg.add_checkbox(label="Enable", tag="Enable_Trim", callback=sync_enable_from_trim,
-                         default_value=enable_state, pos=[viewport_width//2-40, 40])
-
-        # EEPROMボタンを追加
         dpg.add_button(label="Save to EEPROM", callback=save_trimdata_to_eeprom,
                        pos=[viewport_width//2+45, 40], width=125)
-
         dpg.add_button(label="Load from EEPROM to Board  ", callback=load_trimdata_from_eeprom_to_board,
                        pos=[viewport_width//2+183, 40], width=200)
-
         dpg.add_button(label="Load from EEPROM to Console", callback=load_from_eeprom_to_console,
                        pos=[viewport_width//2+183, 65], width=200)
 
-        trim_window_left_block = viewport_width*7//25
+        # --- ステップ値入力フィールド（左下） ---------------------------------------
+        dpg.add_input_float(label="delta", tag=STEP_TAG, default_value=1.0, width=90,
+                            pos=[viewport_height-20, viewport_height-80],
+                            min_value=0.0, min_clamped=True, format="%.2f")
 
-        # 「ヘッダー」の追加
-        dpg.add_text("Idx", pos=[trim_window_left_block-185, 90])
-        dpg.add_text("Mt", pos=[trim_window_left_block-157, 90])
-        dpg.add_text("ID", pos=[trim_window_left_block-125, 90])
-        dpg.add_text("Rev", pos=[trim_window_left_block-90, 90])
-        dpg.add_text("Right Side Servos", pos=[trim_window_left_block-30, 90])
+        # --- ヘッダー（右サーボ列） -------------------------------------------------
+        dpg.add_text("Idx", pos=[trim_window_left_block-165, 95])
+        dpg.add_text("Mt",  pos=[trim_window_left_block-132, 95])
+        dpg.add_text("ID",  pos=[trim_window_left_block-104, 95])
+        dpg.add_text("Rev", pos=[trim_window_left_block-77,  95])
+        dpg.add_text("Right Side Servo Values", pos=[trim_window_left_block-30, 90])
 
-        # 右側のサーボのトリム設定
-        for i in range(0, MRD_SERVO_SLOTS, 1):
-            # インデックス番号を表示（変更不可）
-            dpg.add_text(f"{i}", pos=[trim_window_left_block-180, 120+i*25])
-            
-            # マウントチェックボックス
+        # --- 右サーボ列 (R0–R14) ----------------------------------------------------
+        for i in range(MRD_SERVO_SLOTS):
+            base_y = 120 + i * 25
+            slider_tag = f"Trim_R{i}"
+
+            dpg.add_text(f"R{i}", pos=[trim_window_left_block-162, base_y])
             dpg.add_checkbox(tag=f"Mount_R{i}", default_value=mrd.servo_mount[f"R{i}"],
-                             callback=toggle_servo_mount, user_data=f"R{i}", pos=[trim_window_left_block-160, 120+i*25])
-            
-            # サーボID入力フィールド
+                             callback=toggle_servo_mount, user_data=f"R{i}", pos=[trim_window_left_block-135, base_y])
             dpg.add_input_text(tag=f"ID_R{i}", default_value=str(mrd.servo_id_values[f"R{i}"]),
-                               width=30, callback=set_servo_id, user_data=f"R{i}", pos=[trim_window_left_block-130, 120+i*25])
-            
-            # 回転方向のチェックボックス
+                               width=25, callback=set_servo_id, user_data=f"R{i}", pos=[trim_window_left_block-107, base_y])
             dpg.add_checkbox(tag=f"Direction_R{i}", default_value=mrd.servo_direction[f"R{i}"],
-                             callback=toggle_servo_direction, user_data=f"R{i}", pos=[trim_window_left_block-90, 120+i*25])
-            
-            # スライダー（位置調整）
-            dpg.add_slider_float(default_value=dpg.get_value(f"ID R{i}"), tag=f"Trim_R{i}", label=f"R{i}",
-                                 max_value=180, min_value=-180, pos=[trim_window_left_block-60, 120+i*25], width=120,
-                                 callback=set_servo_angle_from_trim)
+                             callback=toggle_servo_direction, user_data=f"R{i}", pos=[trim_window_left_block-75, base_y])
+
+            # スライダー
+            dpg.add_slider_float(default_value=0.0, tag=slider_tag, max_value=180, min_value=-180, width=100, #label=f"R{i}", 
+                                 callback=set_servo_angle_from_trim, pos=[trim_window_left_block-50, base_y])
+
+            # ＋／− ボタン
+            dpg.add_button(label="-", width=18,pos=[trim_window_left_block+55, base_y], callback=step_trim, user_data=(slider_tag, -1))
+            dpg.add_button(label="+", width=18, pos=[trim_window_left_block+77, base_y], callback=step_trim, user_data=(slider_tag, +1))
 
             # インプットフィールド
-            dpg.add_input_text(tag=f"Input_Trim_R{i}", decimal=True, width=50, pos=[trim_window_left_block+65, 120+i*25])
+            dpg.add_input_text(tag=f"Input_Trim_R{i}", decimal=True, width=50, pos=[trim_window_left_block+100, base_y])
 
             # エンターボタン
             dpg.add_button(label="Enter", tag=f"Enter_Trim_R{i}", callback=apply_trim_input_value, user_data=f"R{i}",
-                           width=42, pos=[trim_window_left_block+120, 120+i*25])
-            
-        trim_window_right_block = viewport_width*18//25
+                           width=42, pos=[trim_window_left_block+155, base_y])
+
+        # --- ヘッダー（左サーボ列） -------------------------------------------------
+        dpg.add_text("Idx", pos=[trim_window_right_block-165, 95])
+        dpg.add_text("Mt",  pos=[trim_window_right_block-132, 95])
+        dpg.add_text("ID",  pos=[trim_window_right_block-104, 95])
+        dpg.add_text("Rev", pos=[trim_window_right_block-77,  95])
+        dpg.add_text("Left Side Servo Values", pos=[trim_window_right_block-30, 95])
         
-        # 左側のヘッダー
-        dpg.add_text("Idx", pos=[trim_window_right_block-185, 90])
-        dpg.add_text("Mt", pos=[trim_window_right_block-157, 90])
-        dpg.add_text("ID", pos=[trim_window_right_block-125, 90])
-        dpg.add_text("Rev", pos=[trim_window_right_block-90, 90])
-        dpg.add_text("Left Side Servos", pos=[trim_window_right_block-10, 90])
-        
-        # 左側のサーボのトリム設定
-        for i in range(0, MRD_SERVO_SLOTS, 1):
-            # インデックス番号を表示（変更不可）
-            dpg.add_text(f"{i}", pos=[trim_window_right_block-180, 120+i*25])
-            
-            # マウントチェックボックス
+        # --- 左サーボ列 (L0–L14) ----------------------------------------------------
+        for i in range(MRD_SERVO_SLOTS):
+            base_y = 120 + i * 25
+            slider_tag = f"Trim_L{i}"
+
+            dpg.add_text(f"L{i}", pos=[trim_window_right_block-162, base_y])
             dpg.add_checkbox(tag=f"Mount_L{i}", default_value=mrd.servo_mount[f"L{i}"],
-                             callback=toggle_servo_mount, user_data=f"L{i}", pos=[trim_window_right_block-160, 120+i*25])
-            
-            # サーボID入力フィールド
+                             callback=toggle_servo_mount, user_data=f"L{i}", pos=[trim_window_right_block-135, base_y])
             dpg.add_input_text(tag=f"ID_L{i}", default_value=str(mrd.servo_id_values[f"L{i}"]),
-                               width=30, callback=set_servo_id, user_data=f"L{i}", pos=[trim_window_right_block-130, 120+i*25])
-            
-            # 回転方向のチェックボックス
+                               width=25, callback=set_servo_id, user_data=f"L{i}", pos=[trim_window_right_block-107, base_y])
             dpg.add_checkbox(tag=f"Direction_L{i}", default_value=mrd.servo_direction[f"L{i}"],
-                             callback=toggle_servo_direction, user_data=f"L{i}", pos=[trim_window_right_block-90, 120+i*25])
-            
+                             callback=toggle_servo_direction, user_data=f"L{i}", pos=[trim_window_right_block-75, base_y])
+
             # スライダー
-            dpg.add_slider_float(default_value=dpg.get_value(f"ID L{i}"), tag=f"Trim_L{i}", label=f"L{i}",
-                                 max_value=180, min_value=-180, pos=[trim_window_right_block-60, 120+i*25], width=120,
-                                 callback=set_servo_angle_from_trim)
+            dpg.add_slider_float(default_value=0.0, tag=slider_tag, max_value=180, min_value=-180, width=100, #label=f"L{i}", 
+                                 callback=set_servo_angle_from_trim, pos=[trim_window_right_block-50, base_y])
+
+            # ＋／− ボタン
+            dpg.add_button(label="-", width=18, pos=[trim_window_right_block+55, base_y],
+                           callback=step_trim, user_data=(slider_tag, -1))
+
+            dpg.add_button(label="+", width=18, pos=[trim_window_right_block+77, base_y],
+                           callback=step_trim, user_data=(slider_tag, +1))
 
             # インプットフィールド
-            dpg.add_input_text(tag=f"Input_Trim_L{i}", decimal=True, width=50, pos=[trim_window_right_block+65, 120+i*25])
+            dpg.add_input_text(tag=f"Input_Trim_L{i}", decimal=True, width=50, pos=[trim_window_right_block+100, base_y])
 
             # エンターボタン
             dpg.add_button(label="Enter", tag=f"Enter_Trim_L{i}", callback=apply_trim_input_value, user_data=f"L{i}",
-                           width=42, pos=[trim_window_right_block+120, 120+i*25])
+                           width=42, pos=[trim_window_right_block+155, base_y])
 
-        # 閉じるボタンを最下部に配置
-        dpg.add_button(label="Close", callback=close_trim_window, width=100, pos=[viewport_width//2-50, viewport_height-80])
+        # --- 閉じるボタン -----------------------------------------------------------
+        dpg.add_button(label="Close", callback=close_trim_window,
+                       width=100, pos=[viewport_width//2-50, viewport_height-80])
         
+
+
+def step_trim(sender, app_data, user_data):
+    """
+    ± ボタン共通コールバック
+    user_data = (slider_tag, direction)
+        direction = +1 なら +y,  -1 なら -y
+    """
+    slider_tag, direction = user_data
+
+    # 現在のスライダー値
+    cur_val = dpg.get_value(slider_tag)
+
+    # Δ値 y を取得（空欄や異常値なら 1.0 にフォールバック）
+    try:
+        step_val = float(dpg.get_value(STEP_TAG))
+    except (TypeError, ValueError):
+        step_val = 1.0
+
+    # 新しい値を clamped(-180, 180) で計算
+    new_val = max(-180.0, min(180.0, cur_val + direction * step_val))
+
+    # スライダー ＆ インプット欄を同期
+    dpg.set_value(slider_tag, new_val)
+
+    # 対応する Input_Trim_* フィールドも更新
+    input_tag = "Input_" + slider_tag.replace("Trim_", "")
+    if dpg.does_item_exist(input_tag):
+        dpg.set_value(input_tag, f"{new_val:.2f}")
+
+    # 既存の set_servo_angle_from_trim も呼び出して Meridim 配列へ反映
+    set_servo_angle_from_trim(slider_tag, new_val, slider_tag)
+    
 
 UDP_SEND_IP_DEF = load_udp_send_ip()        # 送信先のESP32のIPアドレス 21
 UDP_SEND_IP = get_udp_send_ip()
