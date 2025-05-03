@@ -100,6 +100,9 @@ MSG_BUFF = MSG_SIZE * 2                     # Meridim配列のバイト長さ
 MSG_ERRS = MSG_SIZE - 2                     # Meridim配列のエラーフラグの格納場所（配列の最後から２番目）
 MSG_CKSM = MSG_SIZE - 1                     # Meridim配列のチェックサムの格納場所（配列の末尾）
 STEP = 94                                   # 1フレームあたりに増加させる制御処理用の数値,サインカーブを何分割するか
+MRD_L_ORIGIDX = 20                          # Meridim配列のL系統の最初のインデックス(デフォルトは20)
+MRD_R_ORIGIDX = 50                          # Meridim配列のR系統の最初のインデックス(デフォルトは50)
+MRD_SERVO_SLOTS = 15                        # Meridim配列の1系統あたりの最大接続サーボ数(デフォルトは15)
 
 # Redisサーバー設定
 REDIS_HOST = "localhost"
@@ -370,14 +373,14 @@ def set_servo_angle_from_trim(channel, app_data):
     # サーボ位置の更新（トリム値がそのままサーボ位置として使用される）
     if servo_id.startswith("L"):
         index = int(servo_id[1:])
-        mrd.s_meridim[21 + index * 2] = int(app_data * 100)
-        mrd.s_meridim_motion_f[21 + index * 2] = app_data
+        mrd.s_meridim[MRD_L_ORIGIDX + 1 + index * 2] = int(app_data * 100)
+        mrd.s_meridim_motion_f[MRD_L_ORIGIDX + 1 + index * 2] = app_data
     elif servo_id.startswith("R"):
         index = int(servo_id[1:])
-        mrd.s_meridim[51 + index * 2] = int(app_data * 100)
-        mrd.s_meridim_motion_f[51 + index * 2] = app_data
+        mrd.s_meridim[MRD_R_ORIGIDX + 1 + index * 2] = int(app_data * 100)
+        mrd.s_meridim_motion_f[MRD_R_ORIGIDX + 1 + index * 2] = app_data
     
-    print(f"Trim setting for {servo_id} changed to {app_data}, servo moving to this position")
+    #print(f"Trim setting for {servo_id} changed to {app_data}, servo moving to this position")
     
 
 # インプットフィールドの値をスライダーに適用するコールバック関数
@@ -440,6 +443,7 @@ def save_trimdata_to_eeprom():
 
     mrd.s_meridim_special = np.zeros(MSG_SIZE, dtype=np.int16)  # 特殊コマンドのデータ用のMeridim配列をNumPy配列として初期化
     
+    trim_msg = "Send Trim data: " 
     # L系統サーボの処理
     for i in range(15):
         l_servo_id = f"L{i}"
@@ -463,14 +467,20 @@ def save_trimdata_to_eeprom():
             l_settings = l_settings - 65536
         
         # 更新したサーボ設定を格納する
-        mrd.s_meridim_special[20 + i * 2] = l_settings
+        mrd.s_meridim_special[MRD_L_ORIGIDX + i * 2] = l_settings
         
         # トリム値の設定
         if mrd.flag_trim_window_open and dpg.does_item_exist(f"Trim_{l_servo_id}"):
             trim_val = dpg.get_value(f"Trim_{l_servo_id}")
             mrd.s_meridim_special[21 + i * 2] = int(trim_val* 100) #xxxx  + mrd.servo_l_trim_values_loaded[i]
+        
+        trim_msg += f"Trim_{l_servo_id}"+trim_val
 
-        print(f"L{i} トリム値: UI={trim_val}, 送信値={mrd.s_meridim_special[21 + i * 2]}")
+        if i > 0:                       # 先頭以外はカンマ区切り
+            trim_msg += ", "
+
+        #print("Trim L{i} 送信値={mrd.s_meridim_special[21 + i * 2]}")
+        #print(f"L{i} 送信値={mrd.s_meridim_special[21 + i * 2]}")
 
     
     # R系統サーボの処理
@@ -496,14 +506,14 @@ def save_trimdata_to_eeprom():
             r_settings = r_settings - 65536
         
         # 更新したサーボ設定を格納する
-        mrd.s_meridim_special[50 + i * 2] = r_settings
+        mrd.s_meridim_special[MRD_R_ORIGIDX + i * 2] = r_settings
         
         # トリム値の設定
         if mrd.flag_trim_window_open and dpg.does_item_exist(f"Trim_{r_servo_id}"):
             trim_val = dpg.get_value(f"Trim_{r_servo_id}")
-            mrd.s_meridim_special[51 + i * 2] = int(trim_val* 100) #xxxx  + mrd.servo_r_trim_values_loaded[i]
+            mrd.s_meridim_special[MRD_R_ORIGIDX + 1 + i * 2] = int(trim_val* 100) #xxxx  + mrd.servo_r_trim_values_loaded[i]
 
-        print(f"R{i} トリム値: UI={trim_val}, 送信値={mrd.s_meridim_special[51 + i * 2]}")
+        #print(f"R{i} トリム値: UI={trim_val}, 送信値={mrd.s_meridim_special[MRD_R_ORIGIDX + 1 + i * 2]}")
     
     # マスターコマンドを設定
     mrd.s_meridim_special[MRD_MASTER] = MCMD_EEPROM_SAVE_TRIM
@@ -622,8 +632,7 @@ def toggle_servo_direction(sender, app_data, user_data):
 # Trim Setting側のスライダーが動いた時のコールバック
 def set_servo_angle_from_trim(channel, app_data):
     servo_id = channel.replace("Trim_", "")
-    print(f"スライダー設定値: Trim_{servo_id} = {app_data}")
-        
+            
     # Axis Monitor側のスライダーを更新
     axis_slider_tag = f"ID {servo_id}"
     dpg.set_value(axis_slider_tag, app_data)
@@ -631,7 +640,7 @@ def set_servo_angle_from_trim(channel, app_data):
     # 元の関数を呼び出してサーボ角度を設定して実際に動かす
     set_servo_angle(axis_slider_tag, app_data)
     
-    print(f"Trim setting for {servo_id} changed to {app_data}, servo moving to this position")
+    #print(f"Trim setting for {servo_id} changed to {app_data}, servo moving to this position")
 
 
 def process_eeprom_data():
@@ -646,8 +655,8 @@ def process_eeprom_data():
     # 各サーボの設定を処理
     for i in range(15):
         # L系統サーボの処理
-        l_settings = mrd.r_meridim[20 + i * 2]
-        l_trim_val = mrd.r_meridim[21 + i * 2] / 100  # トリム値（100で割って実際の角度に）
+        l_settings = mrd.r_meridim[MRD_L_ORIGIDX + i * 2]
+        l_trim_val = mrd.r_meridim[MRD_L_ORIGIDX+1 + i * 2] / 100  # トリム値（100で割って実際の角度に）
         # xxxxx
         
         # マウント情報（bit0）を抽出
@@ -685,8 +694,8 @@ def process_eeprom_data():
                 dpg.set_value(f"Trim_{l_servo_key}", l_trim_val)
         
         # R系統サーボの処理
-        r_settings = mrd.r_meridim[50 + i * 2]
-        r_trim_val = mrd.r_meridim[51 + i * 2] / 100
+        r_settings = mrd.r_meridim[MRD_R_ORIGIDX + i * 2]
+        r_trim_val = mrd.r_meridim[MRD_R_ORIGIDX + 1 + i * 2] / 100
         
         # マウント情報（bit0）を抽出
         r_mount = (r_settings & 0x01) > 0
@@ -828,14 +837,13 @@ def start_trim_setting():
     
             
 # Trim Setting ウィンドウを作成する関数
-# Trim Setting ウィンドウを作成する関数
 def create_trim_window():
     # ビューポートのサイズを取得して、ウィンドウサイズを決定
     viewport_width = dpg.get_viewport_width()
     viewport_height = dpg.get_viewport_height()
 
     with dpg.window(label="Trim Setting", tag="Trim Setting",
-                    width=viewport_width-20, height=viewport_height-20,
+                    width=viewport_width-20, height=530,
                     pos=[10, 10], on_close=close_trim_window):
 
         # コントロールエリア
@@ -846,22 +854,22 @@ def create_trim_window():
 
         # Start Trim Settingボタンを追加
         dpg.add_button(label="Start Trim Setting", callback=start_trim_setting, 
-                       pos=[10, 40], width=120)
+                       pos=[15, 40], width=140)
 
         # Homeボタンを追加（Axis Monitorと同じ機能）
-        dpg.add_button(label="Home", callback=set_trim_home, pos=[viewport_width//2-318, 40], width=40)
+        dpg.add_button(label="Home", callback=set_trim_home, pos=[viewport_width//2-260, 40], width=40)
 
         # Powerチェックボックス
         dpg.add_checkbox(label="Power", tag="Power_Trim", callback=sync_power_from_trim,
-                         default_value=power_state, pos=[viewport_width//2-250, 40])
+                         default_value=power_state, pos=[viewport_width//2-190, 40])
 
         # Pythonチェックボックス
         dpg.add_checkbox(label="Python", tag="Python_Trim", callback=sync_python_from_trim,
-                         default_value=python_state, pos=[viewport_width//2-170, 40])
+                         default_value=python_state, pos=[viewport_width//2-110, 40])
 
         # Enableチェックボックス
         dpg.add_checkbox(label="Enable", tag="Enable_Trim", callback=sync_enable_from_trim,
-                         default_value=enable_state, pos=[viewport_width//2-90, 40])
+                         default_value=enable_state, pos=[viewport_width//2-40, 40])
 
         # EEPROMボタンを追加
         dpg.add_button(label="Save to EEPROM", callback=save_trimdata_to_eeprom,
@@ -873,80 +881,84 @@ def create_trim_window():
         dpg.add_button(label="Load from EEPROM to Console", callback=load_from_eeprom_to_console,
                        pos=[viewport_width//2+183, 65], width=200)
 
+        trim_window_left_block = viewport_width*7//25
+
         # 「ヘッダー」の追加
-        dpg.add_text("Index", pos=[viewport_width//4-200, 90])
-        dpg.add_text("Mount", pos=[viewport_width//4-170, 90])
-        dpg.add_text("ID", pos=[viewport_width//4-130, 90])
-        dpg.add_text("Reverse", pos=[viewport_width//4-90, 90])
-        dpg.add_text("Right Side Servos", pos=[viewport_width//4-10, 90])
+        dpg.add_text("Idx", pos=[trim_window_left_block-185, 90])
+        dpg.add_text("Mt", pos=[trim_window_left_block-157, 90])
+        dpg.add_text("ID", pos=[trim_window_left_block-125, 90])
+        dpg.add_text("Rev", pos=[trim_window_left_block-90, 90])
+        dpg.add_text("Right Side Servos", pos=[trim_window_left_block-30, 90])
 
         # 右側のサーボのトリム設定
-        for i in range(0, 15, 1):
+        for i in range(0, MRD_SERVO_SLOTS, 1):
             # インデックス番号を表示（変更不可）
-            dpg.add_text(f"{i}", pos=[viewport_width//4-200, 120+i*25])
+            dpg.add_text(f"{i}", pos=[trim_window_left_block-180, 120+i*25])
             
             # マウントチェックボックス
             dpg.add_checkbox(tag=f"Mount_R{i}", default_value=mrd.servo_mount[f"R{i}"],
-                             callback=toggle_servo_mount, user_data=f"R{i}", pos=[viewport_width//4-170, 120+i*25])
+                             callback=toggle_servo_mount, user_data=f"R{i}", pos=[trim_window_left_block-160, 120+i*25])
             
             # サーボID入力フィールド
             dpg.add_input_text(tag=f"ID_R{i}", default_value=str(mrd.servo_id_values[f"R{i}"]),
-                               width=30, callback=set_servo_id, user_data=f"R{i}", pos=[viewport_width//4-130, 120+i*25])
+                               width=30, callback=set_servo_id, user_data=f"R{i}", pos=[trim_window_left_block-130, 120+i*25])
             
             # 回転方向のチェックボックス
             dpg.add_checkbox(tag=f"Direction_R{i}", default_value=mrd.servo_direction[f"R{i}"],
-                             callback=toggle_servo_direction, user_data=f"R{i}", pos=[viewport_width//4-90, 120+i*25])
+                             callback=toggle_servo_direction, user_data=f"R{i}", pos=[trim_window_left_block-90, 120+i*25])
             
             # スライダー（位置調整）
             dpg.add_slider_float(default_value=dpg.get_value(f"ID R{i}"), tag=f"Trim_R{i}", label=f"R{i}",
-                                 max_value=180, min_value=-180, pos=[viewport_width//4-60, 120+i*25], width=120,
+                                 max_value=180, min_value=-180, pos=[trim_window_left_block-60, 120+i*25], width=120,
                                  callback=set_servo_angle_from_trim)
 
             # インプットフィールド
-            dpg.add_input_text(tag=f"Input_Trim_R{i}", decimal=True, width=50, pos=[viewport_width//4+65, 120+i*25])
+            dpg.add_input_text(tag=f"Input_Trim_R{i}", decimal=True, width=50, pos=[trim_window_left_block+65, 120+i*25])
 
             # エンターボタン
             dpg.add_button(label="Enter", tag=f"Enter_Trim_R{i}", callback=apply_trim_input_value, user_data=f"R{i}",
-                           width=42, pos=[viewport_width//4+120, 120+i*25])
-
+                           width=42, pos=[trim_window_left_block+120, 120+i*25])
+            
+        trim_window_right_block = viewport_width*18//25
+        
         # 左側のヘッダー
-        dpg.add_text("Index", pos=[viewport_width*6//9-200, 90])
-        dpg.add_text("Mount", pos=[viewport_width*6//9-170, 90])
-        dpg.add_text("ID", pos=[viewport_width*6//9-130, 90])
-        dpg.add_text("Reverse", pos=[viewport_width*6//9-90, 90])
-        dpg.add_text("Left Side Servos", pos=[viewport_width*6//9-10, 90])
+        dpg.add_text("Idx", pos=[trim_window_right_block-185, 90])
+        dpg.add_text("Mt", pos=[trim_window_right_block-157, 90])
+        dpg.add_text("ID", pos=[trim_window_right_block-125, 90])
+        dpg.add_text("Rev", pos=[trim_window_right_block-90, 90])
+        dpg.add_text("Left Side Servos", pos=[trim_window_right_block-10, 90])
         
         # 左側のサーボのトリム設定
-        for i in range(0, 15, 1):
+        for i in range(0, MRD_SERVO_SLOTS, 1):
             # インデックス番号を表示（変更不可）
-            dpg.add_text(f"{i}", pos=[viewport_width*6//9-200, 120+i*25])
+            dpg.add_text(f"{i}", pos=[trim_window_right_block-180, 120+i*25])
             
             # マウントチェックボックス
             dpg.add_checkbox(tag=f"Mount_L{i}", default_value=mrd.servo_mount[f"L{i}"],
-                             callback=toggle_servo_mount, user_data=f"L{i}", pos=[viewport_width*6//9-170, 120+i*25])
+                             callback=toggle_servo_mount, user_data=f"L{i}", pos=[trim_window_right_block-160, 120+i*25])
             
             # サーボID入力フィールド
             dpg.add_input_text(tag=f"ID_L{i}", default_value=str(mrd.servo_id_values[f"L{i}"]),
-                               width=30, callback=set_servo_id, user_data=f"L{i}", pos=[viewport_width*6//9-130, 120+i*25])
+                               width=30, callback=set_servo_id, user_data=f"L{i}", pos=[trim_window_right_block-130, 120+i*25])
             
             # 回転方向のチェックボックス
             dpg.add_checkbox(tag=f"Direction_L{i}", default_value=mrd.servo_direction[f"L{i}"],
-                             callback=toggle_servo_direction, user_data=f"L{i}", pos=[viewport_width*6//9-90, 120+i*25])
+                             callback=toggle_servo_direction, user_data=f"L{i}", pos=[trim_window_right_block-90, 120+i*25])
             
             # スライダー
             dpg.add_slider_float(default_value=dpg.get_value(f"ID L{i}"), tag=f"Trim_L{i}", label=f"L{i}",
-                                 max_value=180, min_value=-180, pos=[viewport_width*6//9-60, 120+i*25], width=120,
+                                 max_value=180, min_value=-180, pos=[trim_window_right_block-60, 120+i*25], width=120,
                                  callback=set_servo_angle_from_trim)
 
             # インプットフィールド
-            dpg.add_input_text(tag=f"Input_Trim_L{i}", decimal=True, width=50, pos=[viewport_width*6//9+65, 120+i*25])
+            dpg.add_input_text(tag=f"Input_Trim_L{i}", decimal=True, width=50, pos=[trim_window_right_block+65, 120+i*25])
 
             # エンターボタン
             dpg.add_button(label="Enter", tag=f"Enter_Trim_L{i}", callback=apply_trim_input_value, user_data=f"L{i}",
-                           width=42, pos=[viewport_width*6//9+120, 120+i*25])
+                           width=42, pos=[trim_window_right_block+120, 120+i*25])
 
         # 閉じるボタンを最下部に配置
-        dpg.add_button(label="Close", callback=close_trim_window, width=100, pos=[viewport_width//2-50, viewport_height-60])
+        dpg.add_button(label="Close", callback=close_trim_window, width=100, pos=[viewport_width//2-50, viewport_height-80])
         
 
 UDP_SEND_IP_DEF = load_udp_send_ip()        # 送信先のESP32のIPアドレス 21
@@ -961,10 +973,6 @@ UDP_SEND_IP = get_udp_send_ip()
 # [ 0 ]  初期設定
 # ------------------------------------------------------------------------
 mrd = MeridianConsole()  # Meridianデータのインスタンス
-
-
-
-
 
 def fetch_redis_data():
     if not mrd.flag_redis_sub:
@@ -1273,10 +1281,10 @@ def meridian_loop():
 
     # [ 5-4 ] : サーボオンオフフラグチェック：サーボオンフラグを格納
                         if mrd.flag_servo_power > 0:
-                            for i in range(20, 80, 2):
+                            for i in range(MRD_L_ORIGIDX, 80, 2):
                                 mrd.s_meridim[i] = 1
                         else:
-                            for i in range(20, 80, 2):
+                            for i in range(MRD_L_ORIGIDX, 80, 2):
                                 mrd.s_meridim[i] = 0
 
     # [ 5-5 ] : リモコンデータをリセットし, PCからのリモコン入力値を格納
@@ -1294,9 +1302,9 @@ def meridian_loop():
     # ▶︎ 5-6-1 : ヨー軸センターリセットコマンドを格納
                         if (mrd.flag_update_yaw > 0):
                             mrd.flag_update_yaw -= 1
-                            mrd.s_meridim[0] = MCMD_UPDATE_YAW_CENTER
+                            mrd.s_meridim[0] = MCMD_SENSOR_YAW_CALIB
                             if (mrd.flag_update_yaw == 0):
-                                print("Send COMMAND 'Set Yaw Center.':["+str(MCMD_UPDATE_YAW_CENTER)+"]")
+                                print("Send COMMAND 'Set Yaw Center.':["+str(MCMD_SENSOR_YAW_CALIB)+"]")
 
     # ▶︎ 5-6-2 : フローモード(ボード側が周期制御を持つ)への切り替え
                         if mrd.flag_set_flow_or_step == 2:
@@ -1310,7 +1318,7 @@ def meridian_loop():
 
     # ▶︎ 5-6-4 : ボード側のフレーム管理時計を現在時間でリセット
                         if mrd.frag_reset_cycle:
-                            mrd.s_meridim[0] = MCMD_RESET_MRD_TIMER
+                            mrd.s_meridim[0] = MCMD_FRAMETIMER_RESET
                             mrd.frag_reset_cycle = False
 
     # [ 5-7 ] : エラーフラグの処理
@@ -1453,7 +1461,7 @@ def set_servo_angle(channel, app_data):
     if channel[3] == "L":
         mrd.s_meridim[int(channel[4:6])*2+21] = int(app_data * 100)
         mrd.s_meridim_motion_f[int(channel[4:6])*2+21] = app_data
-        print(f"L{channel[4:6]}[{int(channel[4:6])*2+21}]:{int(app_data*100)}")
+        #print(f"L{channel[4:6]}[{int(channel[4:6])*2+21}]:{int(app_data*100)}")
 
         # Trim Settingウィンドウが開かれている場合は、対応するスライダーを更新
         if mrd.flag_trim_window_open and dpg.does_item_exist(f"Trim_L{channel[4:6]}"):
@@ -1462,7 +1470,7 @@ def set_servo_angle(channel, app_data):
     if channel[3] == "R":
         mrd.s_meridim[int(channel[4:6])*2+51] = int(app_data * 100)
         mrd.s_meridim_motion_f[int(channel[4:6])*2+51] = app_data
-        print(f"R{channel[4:6]}[{int(channel[4:6])*2+51}]:{int(app_data*100)}")
+        #print(f"R{channel[4:6]}[{int(channel[4:6])*2+51}]:{int(app_data*100)}")
 
         # Trim Settingウィンドウが開かれている場合は、対応するスライダーを更新
         if mrd.flag_trim_window_open and dpg.does_item_exist(f"Trim_R{channel[4:6]}"):
@@ -1474,10 +1482,10 @@ def change_display_mode(sender, app_data, user_data):
     chosen_option = dpg.get_value(sender)
     if chosen_option == "Target":
         mrd.flag_display_mode = 1
-        print("Target mode selected")
+        print("Target mode selected.")
     elif chosen_option == "Actual":
         mrd.flag_display_mode = 0
-        print("Actual mode selected")
+        print("Actual mode selected.")
 
 
 # [Axis Monitor] ウィンドウのhomeボタン処理
@@ -1732,12 +1740,12 @@ def main():
         # [ Axis Monitor ] : サーボ位置モニタリング用のウィンドウ（表示位置:上段/左側）
         with dpg.window(label="Axis Monitor", width=250, height=370, pos=[5, 5]):
             with dpg.group(label='RightSide'):
-                for i in range(0, 15, 1):
+                for i in range(0, MRD_SERVO_SLOTS, 1):
                     dpg.add_slider_float(default_value=0, tag="ID R"+str(i), label="R"+str(i),
                                          max_value=180, min_value=-180, callback=set_servo_angle, pos=[10, 35+i*20], width=80)
 
             with dpg.group(label='LeftSide'):
-                for i in range(0, 15, 1):
+                for i in range(0, MRD_SERVO_SLOTS, 1):
                     dpg.add_slider_float(default_value=0, tag="ID L"+str(i), label="L"+str(i),
                                          max_value=180, min_value=-180, callback=set_servo_angle, pos=[135, 35+i*20], width=80)
 
@@ -1893,7 +1901,7 @@ def main():
             dpg.set_value("DispMessage4", mrd.message4)
 
             # サーボデータとIMUデータの表示更新
-            for i in range(0, 15, 1):
+            for i in range(0, MRD_SERVO_SLOTS, 1):
                 _idld = mrd.d_meridim[21+i*2]
                 _idrd = mrd.d_meridim[51+i*2]
                 _idsensor = mrd.r_meridim[i+2]/10000
