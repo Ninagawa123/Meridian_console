@@ -72,7 +72,7 @@ Windowsの場合, Meridian_console.pyの起動時に通信を許可するかど�
   
 ## 画面の解説  
   
-<img src="image/console_img_20250406..png" width="851" alt="console_img_20250406.png">  
+<img src="image/console_img_20250406.png" width="851" alt="console_img_20250406.png">  
   
 #### Axis Monitor  
 受信したサーボの角度を表示します.  
