@@ -119,7 +119,7 @@ TsySKIP, PcSKIP: 連番データの取りこぼし数を表示します.
 ※ I2C接続のMerimoteを使用した場合, PS4リモコン接続での受信スキップ回数はほぼ0になります. 
 
 #### Trim Setting Window  (2025.05.04現在, LITE版のみ対応)
-Axis Monitorの【Trim】ボタンにより開きます. 実機を見ながらサーボのトリム値を調整し, EEPROMに保存することができます.  
+[Axis Monitor]の [Trim]ボタンにより開きます. 実機を見ながらサーボのトリム値を調整し, EEPROMに保存することができます.  
 受信したサーボの角度を表示します.  
 
 <details>
