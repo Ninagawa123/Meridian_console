@@ -124,6 +124,8 @@ TsySKIP, PcSKIP: 連番データの取りこぼし数を表示します.
 
 <details>
 <summary>トリム調整の方法</summary>
+
+<img src="image/console_img_trimmode_20250504.png" width="800" alt="console_img_20250406.png">  
   
 以下の手順でサーボのトリム値を設定します.  
 サーボ設定はEEPROMに保存されます.  
