@@ -495,7 +495,6 @@ def save_trimdata_to_eeprom():
             trim_val = dpg.get_value(f"Trim_{l_servo_ix}")
             mrd.s_meridim_special[MRD_L_ORIG_IDX + 1 + i * 2] = int(trim_val* 100) #xxxx  + mrd.servo_l_trim_values_loaded[i]
         
-        #trim_msg += f"Trim_{l_servo_ix}"+trim_val
         trim_msg += l_servo_ix + " " + f"{trim_val:.2f}"
 
         if i < MRD_SERVO_SLOTS-1:                       # ラスト以外はカンマ区切り
@@ -619,8 +618,6 @@ def set_servo_angle_from_trim(channel, app_data):
     
     # 元の関数を呼び出してサーボ角度を設定して実際に動かす
     set_servo_angle(axis_slider_tag, app_data)
-    
-    #print(f"Trim setting for {servo_ix} changed to {app_data}, servo moving to this position")
 
 
 def process_eeprom_data():
@@ -628,7 +625,7 @@ def process_eeprom_data():
     EEPROMからのデータを処理し, サーボの設定をUIに反映する
     bit0: マウントの有無(1=マウントあり, 0=マウントなし)
     bit1-7: サーボID(0-255)
-    bit8: 回転方向(1=正転, 0=逆転)
+    bit8: 回転方向(0=逆転, 1=正転,)
     """
     print("Processing EEPROM data...")
     
@@ -636,7 +633,7 @@ def process_eeprom_data():
     for i in range(MRD_SERVO_SLOTS):
         # L系統サーボの処理
         l_settings = mrd.r_meridim[MRD_L_ORIG_IDX + i * 2]
-        l_trim_val = mrd.r_meridim[MRD_L_ORIG_IDX + 1 + i * 2] / 100  # トリム値(100で割って実際の角度に)
+        l_trim_val = mrd.r_meridim[MRD_L_ORIG_IDX + 1 + i * 2] * 0.01  # トリム値(100で割って実際の角度に)
         
         # マウント情報(bit0)を抽出
         l_mount = (l_settings & 0x01) > 0  # 1ならTrue, 0ならFalse
@@ -674,7 +671,7 @@ def process_eeprom_data():
         
         # R系統サーボの処理
         r_settings = mrd.r_meridim[MRD_R_ORIG_IDX + i * 2]
-        r_trim_val = mrd.r_meridim[MRD_R_ORIG_IDX + 1 + i * 2] / 100
+        r_trim_val = mrd.r_meridim[MRD_R_ORIG_IDX + 1 + i * 2] * 0.01
         
         # マウント情報(bit0)を抽出
         r_mount = (r_settings & 0x01) > 0
@@ -714,14 +711,14 @@ def process_eeprom_data():
     if mrd.flag_servo_power:  # サーボパワーがオンの場合のみ適用
         for i in range(MRD_SERVO_SLOTS):
             # 左側サーボ
-            l_trim_val = mrd.r_meridim[MRD_L_ORIG_IDX + 1 + i * 2] / 100
+            l_trim_val = mrd.r_meridim[MRD_L_ORIG_IDX + 1 + i * 2] * 0.01
             mrd.s_meridim[MRD_L_ORIG_IDX + 1 + i * 2] = mrd.r_meridim[MRD_L_ORIG_IDX + 1 + i * 2]
             mrd.s_meridim_motion_f[MRD_L_ORIG_IDX + 1 + i * 2] = l_trim_val
             # Axis Monitorのスライダーも更新
             dpg.set_value(f"ID L{i}", l_trim_val)
             
             # 右側サーボ
-            r_trim_val = mrd.r_meridim[MRD_R_ORIG_IDX + 1 + i * 2] / 100
+            r_trim_val = mrd.r_meridim[MRD_R_ORIG_IDX + 1 + i * 2] * 0.01
             mrd.s_meridim[MRD_R_ORIG_IDX + 1 + i * 2] = mrd.r_meridim[MRD_R_ORIG_IDX + 1 + i * 2]
             mrd.s_meridim_motion_f[MRD_R_ORIG_IDX + 1 + i * 2] = r_trim_val
             # Axis Monitorのスライダーも更新
@@ -1514,13 +1511,26 @@ def meridian_loop():
                                 mrd.s_meridim[i] = 0
 
     # [ 5-5 ] : リモコンデータをリセットし, PCからのリモコン入力値を格納
-                        temp = np.array([0], dtype=np.int16)
-                        temp[0] = 0
-                        temp[0] = mrd.pad_button_panel_short[0]  # ボタンのショート型変換
-                        mrd.s_meridim[15] = temp[0]  # ボタン
+                        #temp = np.array([0], dtype=np.uint16)  # uint16に変更
+                        #temp[0] = 0
+                        #temp[0] = mrd.pad_button_panel_short[0]
+                        #mrd.s_meridim[15] = int(temp[0])  # 安全に変換して格納
+                        #pad_button_tmp = np.int16(mrd.pad_button_panel_short[0])
+                        #mrd.s_meridim[15] = pad_button_tmp  # ボタン
+                        #pad_button_tmp = mrd.pad_button_panel_short[0] & 0xFFFF  # uint16保証
+                        #mrd.s_meridim[15] = np.int16(pad_button_tmp)  # int16に変換して格納
+                        
+                        pad_button_tmp = np.uint16(mrd.pad_button_panel_short[0])
+                        mrd.s_meridim[15] = np.int16(pad_button_tmp)  # uint16→int16変換
+                        
+                        #pad_button_tmp = mrd.pad_button_panel_short[0]  # そのままuint16として使用
+                        #mrd.s_meridim[15] = np.int16(pad_button_tmp) if pad_button_tmp <= 32767 else np.int16(pad_button_tmp - 65536)
                         mrd.s_meridim[16] = 0  # アナログ1
                         mrd.s_meridim[17] = 0  # アナログ2
                         mrd.s_meridim[18] = 0  # アナログ3
+
+
+
 
     # [ 5-6 ] : 送信マスターコマンドの作成
                         mrd.s_meridim[0] = MSG_SIZE  # デフォルト値を格納
@@ -2165,9 +2175,11 @@ def main():
 
             # リモコンデータの表示更新
             pad_button_short = np.array([0], dtype=np.uint16)
-            # 受信値とコンソール入力値を合成
-            pad_button_short[0] = mrd.r_meridim[15] | mrd.pad_button_panel_short[0]
-            dpg.set_value("pad_button", str(pad_button_short[0]))
+            received_button = int(mrd.r_meridim[15]) & 0xFFFF # int16→uint16変換 
+            pad_button_short[0] = received_button | mrd.pad_button_panel_short[0] # uint16同士でOR演算
+            
+            # 表示用（自動的にint32）
+            dpg.set_value("pad_button", str(pad_button_short[0]))            
             dpg.set_value("pad_Lx", int(mrd.r_meridim_char[33]))
             dpg.set_value("pad_Ly", int(mrd.r_meridim_char[32]))
             dpg.set_value("pad_Rx", int(mrd.r_meridim_char[35]))
