@@ -963,7 +963,7 @@ def export_settings_to_file():
     
     # L系統のトリム値
     content += "// L系統のトリム値(degree)\n"
-    content += "float IDL_TRIM[IXL_MAX] = {\n"
+    content += "float IXL_TRIM[IXL_MAX] = {\n"
     for i in range(MRD_SERVO_SLOTS):
         trim_tag = f"Trim_L{i}"
         # トリム値を取得(UIウィンドウが開いていない場合は0に)
@@ -1000,7 +1000,7 @@ def export_settings_to_file():
     
     # R系統のトリム値
     content += "// R系統のトリム値(degree)\n"
-    content += "float IDR_TRIM[IXR_MAX] = {\n"
+    content += "float IXR_TRIM[IXR_MAX] = {\n"
     for i in range(MRD_SERVO_SLOTS):
         trim_tag = f"Trim_R{i}"
         # トリム値を取得(UIウィンドウが開いていない場合は0に)
