@@ -1598,29 +1598,29 @@ def meridian_loop():
                         # redisからのデータを仮にここで処理
                         fetch_redis_data()
 
-                        if mrd.flag_python_action:  # コード書式は自由だが, 仮にすべての関節角度に0を代入する場合の例
-                            mrd.s_meridim_motion_f[21] = 0  # 頭ヨー
-                            mrd.s_meridim_motion_f[23] = 0  # 左肩ピッチ
-                            mrd.s_meridim_motion_f[25] = 0  # 左肩ロール
-                            mrd.s_meridim_motion_f[27] = 0  # 左肘ヨー
-                            mrd.s_meridim_motion_f[29] = 0  # 左肘ピッチ
-                            mrd.s_meridim_motion_f[31] = 0  # 左股ヨー
-                            mrd.s_meridim_motion_f[33] = 0  # 左股ロール
-                            mrd.s_meridim_motion_f[35] = 0  # 左股ピッチ
-                            mrd.s_meridim_motion_f[37] = 0  # 左膝ピッチ
-                            mrd.s_meridim_motion_f[39] = 0  # 左足首ピッチ
-                            mrd.s_meridim_motion_f[41] = 0  # 左足首ロール
-                            mrd.s_meridim_motion_f[51] = 0  # 腰ヨー
-                            mrd.s_meridim_motion_f[53] = 0  # 右肩ピッチ
-                            mrd.s_meridim_motion_f[55] = 0  # 右肩ロール
-                            mrd.s_meridim_motion_f[57] = 0  # 右肘ヨー
-                            mrd.s_meridim_motion_f[59] = 0  # 右肘ピッチ
-                            mrd.s_meridim_motion_f[61] = 0  # 右股ヨー
-                            mrd.s_meridim_motion_f[63] = 0  # 右股ロール
-                            mrd.s_meridim_motion_f[65] = 0  # 右股ピッチ
-                            mrd.s_meridim_motion_f[67] = 0  # 右膝ピッチ
-                            mrd.s_meridim_motion_f[69] = 0  # 右足首ピッチ
-                            mrd.s_meridim_motion_f[71] = 0  # 右足首ロール
+                        # if mrd.flag_python_action:  # コード書式は自由だが, 仮にすべての関節角度に0を代入する場合の例
+                        #     mrd.s_meridim_motion_f[21] = 0  # 頭ヨー
+                        #     mrd.s_meridim_motion_f[23] = 0  # 左肩ピッチ
+                        #     mrd.s_meridim_motion_f[25] = 0  # 左肩ロール
+                        #     mrd.s_meridim_motion_f[27] = 0  # 左肘ヨー
+                        #     mrd.s_meridim_motion_f[29] = 0  # 左肘ピッチ
+                        #     mrd.s_meridim_motion_f[31] = 0  # 左股ヨー
+                        #     mrd.s_meridim_motion_f[33] = 0  # 左股ロール
+                        #     mrd.s_meridim_motion_f[35] = 0  # 左股ピッチ
+                        #     mrd.s_meridim_motion_f[37] = 0  # 左膝ピッチ
+                        #     mrd.s_meridim_motion_f[39] = 0  # 左足首ピッチ
+                        #     mrd.s_meridim_motion_f[41] = 0  # 左足首ロール
+                        #     mrd.s_meridim_motion_f[51] = 0  # 腰ヨー
+                        #     mrd.s_meridim_motion_f[53] = 0  # 右肩ピッチ
+                        #     mrd.s_meridim_motion_f[55] = 0  # 右肩ロール
+                        #     mrd.s_meridim_motion_f[57] = 0  # 右肘ヨー
+                        #     mrd.s_meridim_motion_f[59] = 0  # 右肘ピッチ
+                        #     mrd.s_meridim_motion_f[61] = 0  # 右股ヨー
+                        #     mrd.s_meridim_motion_f[63] = 0  # 右股ロール
+                        #     mrd.s_meridim_motion_f[65] = 0  # 右股ピッチ
+                        #     mrd.s_meridim_motion_f[67] = 0  # 右膝ピッチ
+                        #     mrd.s_meridim_motion_f[69] = 0  # 右足首ピッチ
+                        #     mrd.s_meridim_motion_f[71] = 0  # 右足首ロール
 
     # [ 5-2 ] : サーボ位置リセットボタン(Home)が押下されていたら全サーボ位置をゼロリセット
                         if mrd.flag_servo_home > 0:
@@ -1636,7 +1636,7 @@ def meridian_loop():
     # [ 5-3 ] : PC側発行のサーボ位置をs_meridimに書き込む
                         if mrd.flag_enable_send_made_data:  # PC側発行データの送信Enable判定
                             for i in range(21, 81, 2):
-                                if mrd.flag_demo_action | mrd.flag_python_action | mrd.flag_ros1_sub:
+                                if mrd.flag_demo_action | mrd.flag_python_action | mrd.flag_enable_send_made_data | mrd.flag_ros1_sub:
                                     mrd.s_meridim[i] = int(mrd.s_meridim_motion_f[i]*100)
                                 else:  # Consoleでモーションを指定しない場合はハンチング防止としてサーボオフ時のデータを送信
                                     mrd.s_meridim[i] = int(mrd.s_meridim_motion_keep_f[i]*100)
@@ -2171,10 +2171,8 @@ def main():
                     dpg.add_slider_float(default_value=0, tag="ID L"+str(i), label="L"+str(i),
                                          max_value=180, min_value=-180, callback=set_servo_angle, pos=[135, 35 + i * 20], width=80)
 
-            dpg.add_button(label="Home", callback=set_servo_home,
-                           pos=[10, 340], width=40)
-            dpg.add_button(label="Trim", callback=open_trim_window, pos=[
-                           55, 340], width=40)
+            dpg.add_button(label="Home", callback=set_servo_home, pos=[10, 340], width=40)
+            dpg.add_button(label="Trim", callback=open_trim_window, pos=[55, 340], width=40)
             dpg.add_radio_button(label="display_mode", items=["Target", "Actual"], callback=change_display_mode,
                                  default_value="Actual", pos=[100, 340], horizontal=True)
 
@@ -2185,15 +2183,11 @@ def main():
         with dpg.window(label="Messege", width=590, height=155, pos=[5, 380]):
 
             dpg.add_text("disp_send ", pos=[383, 53])
-            dpg.add_checkbox(
-                tag="disp_send", callback=set_disp_send, pos=[452, 53])
+            dpg.add_checkbox(tag="disp_send", callback=set_disp_send, pos=[452, 53])
             dpg.add_text("disp_rcvd ", pos=[483, 53])
-            dpg.add_checkbox(
-                tag="disp_rcvd", callback=set_disp_rcvd, pos=[551, 53])
-            dpg.add_button(label="ResetCycle",
-                           callback=reset_cycle, width=80, pos=[390, 28])
-            dpg.add_button(label="ResetCounter",
-                           callback=reset_counter, width=90, pos=[480, 28])
+            dpg.add_checkbox(tag="disp_rcvd", callback=set_disp_rcvd, pos=[551, 53])
+            dpg.add_button(label="ResetCycle", callback=reset_cycle, width=80, pos=[390, 28])
+            dpg.add_button(label="ResetCounter", callback=reset_counter, width=90, pos=[480, 28])
             dpg.add_text(mrd.message0, tag="DispMessage0")
             dpg.add_text(mrd.message1, tag="DispMessage1")
             dpg.add_text(mrd.message2, tag="DispMessage2")
@@ -2231,21 +2225,16 @@ def main():
                                      max_value=327, min_value=-327, pos=[115, 120], width=60)
                 dpg.add_slider_float(default_value=0, tag="mpu12", label="yaw",
                                      max_value=327, min_value=-327, pos=[220, 120], width=60)
-                dpg.add_button(
-                    label="SetYaw", callback=set_yaw_center, width=50, pos=[270, 148])
+                dpg.add_button(label="SetYaw", callback=set_yaw_center, width=50, pos=[270, 148])
 
 # ------------------------------------------------------------------------
 # [ Command ] : コマンド送信/リモコン値表示用ウィンドウ(表示位置:中段/中央)
 # ------------------------------------------------------------------------
         with dpg.window(label="Command", width=335, height=190, pos=[260, 185]):
-            dpg.add_checkbox(label="Power", tag="Power",
-                             callback=set_servo_power, pos=[100, 27])
-            dpg.add_checkbox(label="Demo", tag="Action",
-                             callback=set_demo_action, pos=[100, 53])
-            dpg.add_checkbox(label="Python", tag="python",
-                             callback=set_python_action, pos=[100, 76])
-            dpg.add_checkbox(label="Enable", tag="Enable",
-                             callback=set_enable, pos=[100, 99])
+            dpg.add_checkbox(label="Power", tag="Power", callback=set_servo_power, pos=[100, 27])
+            dpg.add_checkbox(label="Demo", tag="Action", callback=set_demo_action, pos=[100, 53])
+            dpg.add_checkbox(label="Python", tag="python", callback=set_python_action, pos=[100, 76])
+            dpg.add_checkbox(label="Enable", tag="Enable", callback=set_enable, pos=[100, 99])
 
             dpg.add_text("ESP32 ->", pos=[20, 40])
             dpg.add_text("ESP32 <-", pos=[20, 83])
@@ -2257,8 +2246,7 @@ def main():
             dpg.add_checkbox(tag="Redis", callback=redis_sub, pos=[270, 104])
             dpg.add_text("<- Redis", pos=[210, 104])
 
-            dpg.add_checkbox(
-                tag="ros1_output_mode", callback=change_ros1_output_mode, user_data=1, pos=[305, 62])
+            dpg.add_checkbox(tag="ros1_output_mode", callback=change_ros1_output_mode, user_data=1, pos=[305, 62])
             dpg.add_text("targ/rcvd", pos=[236, 62])
 
             dpg.draw_rectangle(pmin=[80, -4], pmax=[190, 95], color=(
@@ -2285,34 +2273,20 @@ def main():
 # [ Button Input ] : リモコン入力コンパネ用ウィンドウ(表示位置:上段/右側)
 # ------------------------------------------------------------------------
         with dpg.window(label="Button Input", width=248, height=155, pos=[600, 5]):
-            dpg.add_checkbox(
-                tag="Btn_L2",      callback=pad_btn_panel_on, user_data=256, pos=[15, 38])
-            dpg.add_checkbox(
-                tag="Btn_L1",      callback=pad_btn_panel_on, user_data=1024, pos=[15, 60])
-            dpg.add_checkbox(
-                tag="Btn_L_UP",    callback=pad_btn_panel_on, user_data=16, pos=[42, 80])
-            dpg.add_checkbox(
-                tag="Btn_L_DOWN",  callback=pad_btn_panel_on, user_data=64, pos=[42, 124])
-            dpg.add_checkbox(
-                tag="Btn_L_LEFT",  callback=pad_btn_panel_on, user_data=128, pos=[20, 102])
-            dpg.add_checkbox(
-                tag="Btn_L_RIGHT", callback=pad_btn_panel_on, user_data=32, pos=[64, 102])
-            dpg.add_checkbox(
-                tag="Btn_SELECT",  callback=pad_btn_panel_on, user_data=1, pos=[100, 102])
-            dpg.add_checkbox(
-                tag="Btn_START",   callback=pad_btn_panel_on, user_data=8, pos=[130, 102])
-            dpg.add_checkbox(
-                tag="Btn_R2",      callback=pad_btn_panel_on, user_data=512, pos=[215, 38])
-            dpg.add_checkbox(
-                tag="Btn_R1",      callback=pad_btn_panel_on, user_data=2048, pos=[215, 60])
-            dpg.add_checkbox(
-                tag="Btn_R_UP",    callback=pad_btn_panel_on, user_data=4096, pos=[188, 80])
-            dpg.add_checkbox(
-                tag="Btn_R_DOWN",  callback=pad_btn_panel_on, user_data=16384, pos=[188, 124])
-            dpg.add_checkbox(
-                tag="Btn_R_LEFT",  callback=pad_btn_panel_on, user_data=32768, pos=[166, 102])
-            dpg.add_checkbox(
-                tag="Btn_R_RIGHT", callback=pad_btn_panel_on, user_data=8192, pos=[210, 102])
+            dpg.add_checkbox(tag="Btn_L2",      callback=pad_btn_panel_on, user_data=256, pos=[15, 38])
+            dpg.add_checkbox(tag="Btn_L1",      callback=pad_btn_panel_on, user_data=1024, pos=[15, 60])
+            dpg.add_checkbox(tag="Btn_L_UP",    callback=pad_btn_panel_on, user_data=16, pos=[42, 80])
+            dpg.add_checkbox(tag="Btn_L_DOWN",  callback=pad_btn_panel_on, user_data=64, pos=[42, 124])
+            dpg.add_checkbox(tag="Btn_L_LEFT",  callback=pad_btn_panel_on, user_data=128, pos=[20, 102])
+            dpg.add_checkbox(tag="Btn_L_RIGHT", callback=pad_btn_panel_on, user_data=32, pos=[64, 102])
+            dpg.add_checkbox(tag="Btn_SELECT",  callback=pad_btn_panel_on, user_data=1, pos=[100, 102])
+            dpg.add_checkbox(tag="Btn_START",   callback=pad_btn_panel_on, user_data=8, pos=[130, 102])
+            dpg.add_checkbox(tag="Btn_R2",      callback=pad_btn_panel_on, user_data=512, pos=[215, 38])
+            dpg.add_checkbox(tag="Btn_R1",      callback=pad_btn_panel_on, user_data=2048, pos=[215, 60])
+            dpg.add_checkbox(tag="Btn_R_UP",    callback=pad_btn_panel_on, user_data=4096, pos=[188, 80])
+            dpg.add_checkbox(tag="Btn_R_DOWN",  callback=pad_btn_panel_on, user_data=16384, pos=[188, 124])
+            dpg.add_checkbox(tag="Btn_R_LEFT",  callback=pad_btn_panel_on, user_data=32768, pos=[166, 102])
+            dpg.add_checkbox(tag="Btn_R_RIGHT", callback=pad_btn_panel_on, user_data=8192, pos=[210, 102])
 
 # ------------------------------------------------------------------------
 # [ Mini Terminal ] : コマンド送信用ミニターミナル(表示位置:中段/右側)
@@ -2321,51 +2295,31 @@ def main():
             # with dpg.group(label='LeftSide'):
             dpg.add_text("Index", pos=[15, 25])
             dpg.add_text("Data", pos=[60, 25])
-            dpg.add_input_text(tag="s_index0", decimal=True,
-                               default_value="0", width=40, pos=[15, 45])
-            dpg.add_input_text(tag="s_data0",  decimal=True, default_value=str(
-                MSG_SIZE), width=60, pos=[60, 45])
-            dpg.add_input_text(tag="s_index1", decimal=True,
-                               default_value="", width=40, pos=[15, 70])
-            dpg.add_input_text(tag="s_data1",  decimal=True,
-                               default_value="", width=60, pos=[60, 70])
-            dpg.add_input_text(tag="s_index2", decimal=True,
-                               default_value="", width=40, pos=[15, 95])
-            dpg.add_input_text(tag="s_data2",  decimal=True,
-                               default_value="", width=60, pos=[60, 95])
-            dpg.add_input_text(tag="s_index3", decimal=True,
-                               default_value="", width=40, pos=[15, 120])
-            dpg.add_input_text(tag="s_data3",  decimal=True,
-                               default_value="", width=60, pos=[60, 120])
+            dpg.add_input_text(tag="s_index0", decimal=True, default_value="0", width=40, pos=[15, 45])
+            dpg.add_input_text(tag="s_data0",  decimal=True, default_value=str(MSG_SIZE), width=60, pos=[60, 45])
+            dpg.add_input_text(tag="s_index1", decimal=True, default_value="", width=40, pos=[15, 70])
+            dpg.add_input_text(tag="s_data1",  decimal=True, default_value="", width=60, pos=[60, 70])
+            dpg.add_input_text(tag="s_index2", decimal=True, default_value="", width=40, pos=[15, 95])
+            dpg.add_input_text(tag="s_data2",  decimal=True, default_value="", width=60, pos=[60, 95])
+            dpg.add_input_text(tag="s_index3", decimal=True, default_value="", width=40, pos=[15, 120])
+            dpg.add_input_text(tag="s_data3",  decimal=True, default_value="", width=60, pos=[60, 120])
             dpg.add_text("Index", pos=[130, 25])
             dpg.add_text("Data", pos=[175, 25])
-            dpg.add_input_text(tag="s_index4", decimal=True,
-                               default_value="", width=40, pos=[130, 45])
-            dpg.add_input_text(tag="s_data4",  decimal=True,
-                               default_value="", width=60, pos=[175, 45])
-            dpg.add_input_text(tag="s_index5", decimal=True,
-                               default_value="", width=40, pos=[130, 70])
-            dpg.add_input_text(tag="s_data5",  decimal=True,
-                               default_value="", width=60, pos=[175, 70])
-            dpg.add_input_text(tag="s_index6", decimal=True,
-                               default_value="", width=40, pos=[130, 95])
-            dpg.add_input_text(tag="s_data6",  decimal=True,
-                               default_value="", width=60, pos=[175, 95])
-            dpg.add_input_text(tag="s_index7", decimal=True,
-                               default_value="", width=40, pos=[130, 120])
-            dpg.add_input_text(tag="s_data7",  decimal=True,
-                               default_value="", width=60, pos=[175, 120])
-            dpg.add_button(
-                label="Set", callback=set_miniterminal_data, pos=[136, 148])
-            dpg.add_button(
-                label="Set&Send", callback=set_and_send_miniterminal_data, pos=[171, 148])
+            dpg.add_input_text(tag="s_index4", decimal=True, default_value="", width=40, pos=[130, 45])
+            dpg.add_input_text(tag="s_data4",  decimal=True, default_value="", width=60, pos=[175, 45])
+            dpg.add_input_text(tag="s_index5", decimal=True, default_value="", width=40, pos=[130, 70])
+            dpg.add_input_text(tag="s_data5",  decimal=True, default_value="", width=60, pos=[175, 70])
+            dpg.add_input_text(tag="s_index6", decimal=True, default_value="", width=40, pos=[130, 95])
+            dpg.add_input_text(tag="s_data6",  decimal=True, default_value="", width=60, pos=[175, 95])
+            dpg.add_input_text(tag="s_index7", decimal=True, default_value="", width=40, pos=[130, 120])
+            dpg.add_input_text(tag="s_data7",  decimal=True, default_value="", width=60, pos=[175, 120])
+            dpg.add_button(label="Set", callback=set_miniterminal_data, pos=[136, 148])
+            dpg.add_button(label="Set&Send", callback=set_and_send_miniterminal_data, pos=[171, 148])
             dpg.add_text("Continuous ", pos=[140, 175])
-            dpg.add_checkbox(tag="SendContinuously",
-                             callback=set_terminal_continuous_on, pos=[215, 175])
+            dpg.add_checkbox(tag="SendContinuously",callback=set_terminal_continuous_on, pos=[215, 175])
             dpg.add_radio_button(["Flow", "Step"], tag="transaction_mode", pos=[10, 148],
                                  callback=set_transaction_mode, default_value="Flow", horizontal=True)
-            dpg.add_button(label=" Next frame ", pos=[
-                           15, 175], callback=send_data_step_frame)  # 右下に設置
+            dpg.add_button(label=" Next frame ", pos=[15, 175], callback=send_data_step_frame)  # 右下に設置
 
 # dpg描画処理2 =========================================================
         with dpg.value_registry():  # dpg変数値の登録
@@ -2442,46 +2396,26 @@ def main():
                          'r_knee_pitch', 'r_ankle_pitch',    'r_ankle_roll']
                     js_meridim.position = \
                         [math.radians(mrd.s_meridim_motion_f[21]/100*mrd.jspn[0]),
-                         math.radians(
-                             mrd.s_meridim_motion_f[23]/100*mrd.jspn[1]),
-                         math.radians(
-                             mrd.s_meridim_motion_f[25]/100)*mrd.jspn[2],
-                         math.radians(
-                             mrd.s_meridim_motion_f[27]/100*mrd.jspn[3]),
-                         math.radians(
-                             mrd.s_meridim_motion_f[29]/100*mrd.jspn[4]),
-                         math.radians(
-                             mrd.s_meridim_motion_f[31]/100*mrd.jspn[5]),
-                         math.radians(
-                             mrd.s_meridim_motion_f[33]/100*mrd.jspn[6]),
-                         math.radians(
-                             mrd.s_meridim_motion_f[35]/100*mrd.jspn[7]),
-                         math.radians(
-                             mrd.s_meridim_motion_f[37]/100*mrd.jspn[8]),
-                         math.radians(
-                             mrd.s_meridim_motion_f[39]/100*mrd.jspn[9]),
-                         math.radians(
-                             mrd.s_meridim_motion_f[41]/100*mrd.jspn[10]),
-                         math.radians(
-                             mrd.s_meridim_motion_f[51]/100*mrd.jspn[15]),
-                         math.radians(
-                             mrd.s_meridim_motion_f[53]/100*mrd.jspn[16]),
-                         math.radians(
-                             mrd.s_meridim_motion_f[55]/100*mrd.jspn[17]),
-                         math.radians(
-                             mrd.s_meridim_motion_f[57]/100*mrd.jspn[18]),
-                         math.radians(
-                             mrd.s_meridim_motion_f[59]/100*mrd.jspn[19]),
-                         math.radians(
-                             mrd.s_meridim_motion_f[61]/100*mrd.jspn[20]),
-                         math.radians(
-                             mrd.s_meridim_motion_f[63]/100*mrd.jspn[21]),
-                         math.radians(
-                             mrd.s_meridim_motion_f[65]/100*mrd.jspn[22]),
-                         math.radians(
-                             mrd.s_meridim_motion_f[67]/100*mrd.jspn[23]),
-                         math.radians(
-                             mrd.s_meridim_motion_f[69]/100*mrd.jspn[24]),
+                         math.radians(mrd.s_meridim_motion_f[23]/100*mrd.jspn[1]),
+                         math.radians(mrd.s_meridim_motion_f[25]/100)*mrd.jspn[2],
+                         math.radians(mrd.s_meridim_motion_f[27]/100*mrd.jspn[3]),
+                         math.radians(mrd.s_meridim_motion_f[29]/100*mrd.jspn[4]),
+                         math.radians(mrd.s_meridim_motion_f[31]/100*mrd.jspn[5]),
+                         math.radians(mrd.s_meridim_motion_f[33]/100*mrd.jspn[6]),
+                         math.radians(mrd.s_meridim_motion_f[35]/100*mrd.jspn[7]),
+                         math.radians(mrd.s_meridim_motion_f[37]/100*mrd.jspn[8]),
+                         math.radians(mrd.s_meridim_motion_f[39]/100*mrd.jspn[9]),
+                         math.radians(mrd.s_meridim_motion_f[41]/100*mrd.jspn[10]),
+                         math.radians(mrd.s_meridim_motion_f[51]/100*mrd.jspn[15]),
+                         math.radians(mrd.s_meridim_motion_f[53]/100*mrd.jspn[16]),
+                         math.radians(mrd.s_meridim_motion_f[55]/100*mrd.jspn[17]),
+                         math.radians(mrd.s_meridim_motion_f[57]/100*mrd.jspn[18]),
+                         math.radians(mrd.s_meridim_motion_f[59]/100*mrd.jspn[19]),
+                         math.radians(mrd.s_meridim_motion_f[61]/100*mrd.jspn[20]),
+                         math.radians(mrd.s_meridim_motion_f[63]/100*mrd.jspn[21]),
+                         math.radians(mrd.s_meridim_motion_f[65]/100*mrd.jspn[22]),
+                         math.radians(mrd.s_meridim_motion_f[67]/100*mrd.jspn[23]),
+                         math.radians(mrd.s_meridim_motion_f[69]/100*mrd.jspn[24]),
                          math.radians(mrd.s_meridim_motion_f[71]/100*mrd.jspn[25])]
 
                     js_meridim.velocity = []
