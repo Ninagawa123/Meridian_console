@@ -29,11 +29,12 @@ $ pip install redis
   
 ```  
 $ CD ~/(Meridian_console.pyのあるディレクトリ)  
-$ python Meridian_console.py [送信先のESP32のIPアドレス 例:192.168.1.17]  
+$ python Meridian_console.py 
 ```  
   
-※送信先のIPアドレスを記入しない場合, board_ip.txtで設定された値で接続を試みます.    
-※IPアドレス情報が見つからない場合は, ターミナルで入力を促されます. 内容はboard_ip.txtに保存されます.  
+起動時にWiFi-DHCP, WiFi-固定IP, 有線LAN-固定IP の３種類から接続方法を選択できます.  
+特に何も設定せずにEnterキーで進めることで, 前回の設定をそのまま使用します.  
+入力したIPアドレス設定は, board_ip.txtに保存されます.  
   
 Windowsの場合, Meridian_console.pyの起動時に通信を許可するかどうかのダイアログボックスが出ることがあります. 許可とすることで実行が可能ですが, 実行できない場合は下記の設定を行なってください.  
 
