@@ -194,7 +194,7 @@ class MeridianConsole:
         self.loop_count = 1              # フレーム数のカウンタ
         self.frame_sync_s = 0            # 送信するframe_sync_r(0-59999)
         self.frame_sync_r_expect = 0     # 毎フレームカウントし, 受信カウントと比較(0-59999)
-        self.frame_sync_r_resv = 0       # 今回受信したframe_sync_r
+        self.frame_sync_r_recv = 0       # 今回受信したframe_sync_r
         self.frame_sync_r_last = 0       # 前回受信したframe_sync_r
         self.error_count_esp_to_pc = 0   # PCからESP32へのUDP送信でのエラー数
         self.error_count_pc_to_esp = 0   # ESP32からPCへのUDP送信でのエラー数
@@ -1461,7 +1461,7 @@ def meridian_loop():
                     # エラーフラグ15ビット目(PCのUDP受信エラーフラグ)を下げる
                     _temp_int16 = mrd.r_meridim[MSG_ERRS] & 0b0111111111111111
                     # フレームスキップチェック用のカウントの代入
-                    mrd.frame_sync_r_resv = mrd.r_meridim_ushort[1]
+                    mrd.frame_sync_r_recv = mrd.r_meridim_ushort[1]
 
 # ------------------------------------------------------------------------
 # [ 3 ] : ステップモードの場合はここでループ待機
@@ -1479,7 +1479,7 @@ def meridian_loop():
 # [ 4 ] : チェックOKの受信UDPデータについての処理
 # ------------------------------------------------------------------------
 # [ 4-1 ] : チェックサムがOK かつ シーケンス番号が前回と異なっていれば, 処理に回す
-                if (_checksum[0] == mrd.r_meridim[MSG_SIZE-1]) and (mrd.frame_sync_r_resv != mrd.frame_sync_r_last):
+                if (_checksum[0] == mrd.r_meridim[MSG_SIZE-1]) and (mrd.frame_sync_r_recv != mrd.frame_sync_r_last):
 
                     # マスターコマンドがMSG_SIZEより大きければ, 特殊コマンドを実行
                     if (mrd.r_meridim[MRD_MASTER] > MSG_SIZE):
@@ -1511,11 +1511,11 @@ def meridian_loop():
                         if mrd.frame_sync_r_expect > 59999:
                             mrd.frame_sync_r_expect = 0
 
-                        if (mrd.frame_sync_r_resv == mrd.frame_sync_r_expect):  # 受信したカウントが予想通りであればスキップなし
+                        if (mrd.frame_sync_r_recv == mrd.frame_sync_r_expect):  # 受信したカウントが予想通りであればスキップなし
                             _temp_int16 &= 0b1111111011111111  # PCのESP経由Teensyからの連番スキップフラグを下げる
                         else:
                             _temp_int16 |= 0b0000000100000000  # PCのESP経由Teensyからの連番スキップフラグを上げる
-                            mrd.frame_sync_r_expect = mrd.frame_sync_r_resv  # 受信カウントの方が多ければズレを検出し, 追いつく
+                            mrd.frame_sync_r_expect = mrd.frame_sync_r_recv  # 受信カウントの方が多ければズレを検出し, 追いつく
                             mrd.error_count_pc_skip += 1  # スキップカウントをプラス
 
     # [ 4-3 ] : 最終サーボ位置情報のキープ
@@ -1559,53 +1559,34 @@ def meridian_loop():
                         if mrd.flag_demo_action:
                             # xをフレームごとにカウントアップ
                             mrd.x += math.pi/STEP
+                            print("DEMO motion:", mrd.s_meridim_motion_f[21:81:2])
                             if mrd.x > math.pi*2000:
                                 mrd.x = 0
+
                             # サインカーブで全身をくねらせる様にダンス
-                            # 頭ヨー
-                            mrd.s_meridim_motion_f[21] = mrd.s_meridim_motion_f[21]
-                            # 左肩ピッチ
-                            mrd.s_meridim_motion_f[23] = mrd.s_meridim_motion_f[23]
-                            # 左肩ロール
-                            mrd.s_meridim_motion_f[25] = mrd.s_meridim_motion_f[25]
-                            # 左肘ヨー
-                            mrd.s_meridim_motion_f[27] = mrd.s_meridim_motion_f[27]
-                            # 左肘ピッチ
-                            mrd.s_meridim_motion_f[29] = mrd.s_meridim_motion_f[29]
-                            # 左股ヨー
-                            mrd.s_meridim_motion_f[31] = mrd.s_meridim_motion_f[31]
-                            # 左股ロール
-                            mrd.s_meridim_motion_f[33] = mrd.s_meridim_motion_f[33]
-                            # 左股ピッチ
-                            mrd.s_meridim_motion_f[35] = mrd.s_meridim_motion_f[35]
-                            # 左膝ピッチ
-                            mrd.s_meridim_motion_f[37] = mrd.s_meridim_motion_f[37]
-                            # 左足首ピッチ
-                            mrd.s_meridim_motion_f[39] = mrd.s_meridim_motion_f[39]
-                            # 左足首ロール
-                            mrd.s_meridim_motion_f[41] = mrd.s_meridim_motion_f[41]
-                            # 腰ヨー
-                            mrd.s_meridim_motion_f[51] = mrd.s_meridim_motion_f[51]
-                            # 右肩ピッチ
-                            mrd.s_meridim_motion_f[53] = mrd.s_meridim_motion_f[53]
-                            # 右肩ロール
-                            mrd.s_meridim_motion_f[55] = mrd.s_meridim_motion_f[55]
-                            # 右肘ヨー
-                            mrd.s_meridim_motion_f[57] = mrd.s_meridim_motion_f[57]
-                            # 右肘ピッチ
-                            mrd.s_meridim_motion_f[59] = mrd.s_meridim_motion_f[59]
-                            # 右股ヨー
-                            mrd.s_meridim_motion_f[61] = mrd.s_meridim_motion_f[61]
-                            # 右股ロール
-                            mrd.s_meridim_motion_f[63] = mrd.s_meridim_motion_f[63]
-                            # 右股ピッチ
-                            mrd.s_meridim_motion_f[65] = mrd.s_meridim_motion_f[65]
-                            # 右膝ピッチ
-                            mrd.s_meridim_motion_f[67] = mrd.s_meridim_motion_f[67]
-                            # 右足首ピッチ
-                            mrd.s_meridim_motion_f[69] = mrd.s_meridim_motion_f[69]
+                            mrd.s_meridim_motion_f[21] = int(np.sin(mrd.x)*30)          # 頭ヨー
+                            mrd.s_meridim_motion_f[23] = int(np.sin(mrd.x)*10) + 20     # 左肩ピッチ
+                            mrd.s_meridim_motion_f[25] = - int(np.sin(mrd.x*2)*10) + 10 # 左肩ロール
+                            mrd.s_meridim_motion_f[27] = int(np.sin(mrd.x)*10) + 10     # 左肘ヨー
+                            mrd.s_meridim_motion_f[29] = int(np.sin(mrd.x)*30) - 30     # 左肘ピッチ
+                            mrd.s_meridim_motion_f[31] = int(np.sin(mrd.x)*5)           # 左股ヨー
+                            mrd.s_meridim_motion_f[33] = - int(np.sin(mrd.x)*4)         # 左股ロール
+                            mrd.s_meridim_motion_f[35] = int(np.sin(mrd.x*2)*20) - 2    # 左股ピッチ
+                            mrd.s_meridim_motion_f[37] = - int(np.sin(mrd.x*2)*40)      # 左膝ピッチ
+                            mrd.s_meridim_motion_f[39] = int(np.sin(mrd.x*2)*20) - 2    # 左足首ピッチ
+                            mrd.s_meridim_motion_f[41] = int(np.sin(mrd.x)*4)           # 左足首ロール
+                            mrd.s_meridim_motion_f[51] = - int(np.sin(mrd.x)*20)        # 腰ヨー
+                            mrd.s_meridim_motion_f[53] = - int(np.sin(mrd.x)*10) + 20   # 右肩ピッチ
+                            mrd.s_meridim_motion_f[55] = - int(np.sin(mrd.x*2)*10) + 10 # 右肩ロール
+                            mrd.s_meridim_motion_f[57] = - int(np.sin(mrd.x)*10) + 10   # 右肘ヨー
+                            mrd.s_meridim_motion_f[59] = - int(np.sin(mrd.x)*30) - 30   # 右肘ピッチ
+                            mrd.s_meridim_motion_f[61] = - int(np.sin(mrd.x)*5)         # 右股ヨー
+                            mrd.s_meridim_motion_f[63] = int(np.sin(mrd.x)*4)           # 右股ロール
+                            mrd.s_meridim_motion_f[65] = - int(np.sin(mrd.x*2)*20) - 2  # 右股ピッチ
+                            mrd.s_meridim_motion_f[67] = int(np.sin(mrd.x*2)*40)        # 右膝ピッチ
+                            mrd.s_meridim_motion_f[69] = - int(np.sin(mrd.x*2)*20) - 2  # 右足首ピッチ
                             # 右足首ロール
-                            mrd.s_meridim_motion_f[71] = mrd.s_meridim_motion_f[71]
+                            mrd.s_meridim_motion_f[71] = -int(np.sin(mrd.x)*4)
                             if mrd.flag_enable_send_made_data:
                                 for i in range(MRD_SERVO_SLOTS):
                                     mrd.s_meridim_motion_keep_f[MRD_L_ORIG_IDX + 1 + i *
@@ -1618,75 +1599,47 @@ def meridian_loop():
                         fetch_redis_data()
 
                         if mrd.flag_python_action:  # コード書式は自由だが, 仮にすべての関節角度に0を代入する場合の例
-                            # 頭ヨー
-                            mrd.s_meridim_motion_f[21] = mrd.s_meridim_motion_f[21]
-                            # 左肩ピッチ
-                            mrd.s_meridim_motion_f[23] = mrd.s_meridim_motion_f[23]
-                            # 左肩ロール
-                            mrd.s_meridim_motion_f[25] = mrd.s_meridim_motion_f[25]
-                            # 左肘ヨー
-                            mrd.s_meridim_motion_f[27] = mrd.s_meridim_motion_f[27]
-                            # 左肘ピッチ
-                            mrd.s_meridim_motion_f[29] = mrd.s_meridim_motion_f[29]
-                            # 左股ヨー
-                            mrd.s_meridim_motion_f[31] = mrd.s_meridim_motion_f[31]
-                            # 左股ロール
-                            mrd.s_meridim_motion_f[33] = mrd.s_meridim_motion_f[33]
-                            # 左股ピッチ
-                            mrd.s_meridim_motion_f[35] = mrd.s_meridim_motion_f[35]
-                            # 左膝ピッチ
-                            mrd.s_meridim_motion_f[37] = mrd.s_meridim_motion_f[37]
-                            # 左足首ピッチ
-                            mrd.s_meridim_motion_f[39] = mrd.s_meridim_motion_f[39]
-                            # 左足首ロール
-                            mrd.s_meridim_motion_f[41] = mrd.s_meridim_motion_f[41]
-                            # 腰ヨー
-                            mrd.s_meridim_motion_f[51] = mrd.s_meridim_motion_f[51]
-                            # 右肩ピッチ
-                            mrd.s_meridim_motion_f[53] = mrd.s_meridim_motion_f[53]
-                            # 右肩ロール
-                            mrd.s_meridim_motion_f[55] = mrd.s_meridim_motion_f[55]
-                            # 右肘ヨー
-                            mrd.s_meridim_motion_f[57] = mrd.s_meridim_motion_f[57]
-                            # 右肘ピッチ
-                            mrd.s_meridim_motion_f[59] = mrd.s_meridim_motion_f[59]
-                            # 右股ヨー
-                            mrd.s_meridim_motion_f[61] = mrd.s_meridim_motion_f[61]
-                            # 右股ロール
-                            mrd.s_meridim_motion_f[63] = mrd.s_meridim_motion_f[63]
-                            # 右股ピッチ
-                            mrd.s_meridim_motion_f[65] = mrd.s_meridim_motion_f[65]
-                            # 右膝ピッチ
-                            mrd.s_meridim_motion_f[67] = mrd.s_meridim_motion_f[67]
-                            # 右足首ピッチ
-                            mrd.s_meridim_motion_f[69] = mrd.s_meridim_motion_f[69]
-                            # 右足首ロール
-                            mrd.s_meridim_motion_f[71] = mrd.s_meridim_motion_f[71]
+                            mrd.s_meridim_motion_f[21] = 0  # 頭ヨー
+                            mrd.s_meridim_motion_f[23] = 0  # 左肩ピッチ
+                            mrd.s_meridim_motion_f[25] = 0  # 左肩ロール
+                            mrd.s_meridim_motion_f[27] = 0  # 左肘ヨー
+                            mrd.s_meridim_motion_f[29] = 0  # 左肘ピッチ
+                            mrd.s_meridim_motion_f[31] = 0  # 左股ヨー
+                            mrd.s_meridim_motion_f[33] = 0  # 左股ロール
+                            mrd.s_meridim_motion_f[35] = 0  # 左股ピッチ
+                            mrd.s_meridim_motion_f[37] = 0  # 左膝ピッチ
+                            mrd.s_meridim_motion_f[39] = 0  # 左足首ピッチ
+                            mrd.s_meridim_motion_f[41] = 0  # 左足首ロール
+                            mrd.s_meridim_motion_f[51] = 0  # 腰ヨー
+                            mrd.s_meridim_motion_f[53] = 0  # 右肩ピッチ
+                            mrd.s_meridim_motion_f[55] = 0  # 右肩ロール
+                            mrd.s_meridim_motion_f[57] = 0  # 右肘ヨー
+                            mrd.s_meridim_motion_f[59] = 0  # 右肘ピッチ
+                            mrd.s_meridim_motion_f[61] = 0  # 右股ヨー
+                            mrd.s_meridim_motion_f[63] = 0  # 右股ロール
+                            mrd.s_meridim_motion_f[65] = 0  # 右股ピッチ
+                            mrd.s_meridim_motion_f[67] = 0  # 右膝ピッチ
+                            mrd.s_meridim_motion_f[69] = 0  # 右足首ピッチ
+                            mrd.s_meridim_motion_f[71] = 0  # 右足首ロール
 
     # [ 5-2 ] : サーボ位置リセットボタン(Home)が押下されていたら全サーボ位置をゼロリセット
                         if mrd.flag_servo_home > 0:
                             for i in range(MRD_SERVO_SLOTS):
                                 mrd.s_meridim[MRD_L_ORIG_IDX + 1 + i * 2] = 0
                                 mrd.s_meridim[MRD_R_ORIG_IDX + 1 + i * 2] = 0
-                                mrd.s_meridim_motion_f[MRD_L_ORIG_IDX +
-                                                       1 + i * 2] = 0
-                                mrd.s_meridim_motion_f[MRD_R_ORIG_IDX +
-                                                       1 + i * 2] = 0
-                                mrd.s_meridim_motion_keep_f[MRD_L_ORIG_IDX +
-                                                            1 + i * 2] = 0
-                                mrd.s_meridim_motion_keep_f[MRD_R_ORIG_IDX +
-                                                            1 + i * 2] = 0
+                                mrd.s_meridim_motion_f[MRD_L_ORIG_IDX + 1 + i * 2] = 0
+                                mrd.s_meridim_motion_f[MRD_R_ORIG_IDX + 1 + i * 2] = 0
+                                mrd.s_meridim_motion_keep_f[MRD_L_ORIG_IDX + 1 + i * 2] = 0
+                                mrd.s_meridim_motion_keep_f[MRD_R_ORIG_IDX + 1 + i * 2] = 0
                             mrd.flag_servo_home = 0
 
     # [ 5-3 ] : PC側発行のサーボ位置をs_meridimに書き込む
                         if mrd.flag_enable_send_made_data:  # PC側発行データの送信Enable判定
                             for i in range(21, 81, 2):
                                 if mrd.flag_demo_action | mrd.flag_python_action | mrd.flag_ros1_sub:
-                                    mrd.s_meridim[i] = int(
-                                        mrd.s_meridim_motion_f[i]*100)
+                                    mrd.s_meridim[i] = int(mrd.s_meridim_motion_f[i]*100)
                                 else:  # Consoleでモーションを指定しない場合はハンチング防止としてサーボオフ時のデータを送信
-                                    mrd.s_meridim[i] = int(
-                                        mrd.s_meridim_motion_keep_f[i]*100)
+                                    mrd.s_meridim[i] = int(mrd.s_meridim_motion_keep_f[i]*100)
 
     # [ 5-4 ] : サーボオンオフフラグチェック：サーボオンフラグを格納
                         if mrd.flag_servo_power > 0:
@@ -1706,10 +1659,8 @@ def meridian_loop():
                         # pad_button_tmp = mrd.pad_button_panel_short[0] & 0xFFFF  # uint16保証
                         # mrd.s_meridim[15] = np.int16(pad_button_tmp)  # int16に変換して格納
 
-                        pad_button_tmp = np.uint16(
-                            mrd.pad_button_panel_short[0])
-                        mrd.s_meridim[15] = np.int16(
-                            pad_button_tmp)  # uint16→int16変換
+                        pad_button_tmp = np.uint16(mrd.pad_button_panel_short[0])
+                        mrd.s_meridim[15] = np.int16(pad_button_tmp)  # uint16→int16変換
 
                         # pad_button_tmp = mrd.pad_button_panel_short[0]  # そのままuint16として使用
                         # mrd.s_meridim[15] = np.int16(pad_button_tmp) if pad_button_tmp <= 32767 else np.int16(pad_button_tmp - 65536)
@@ -1772,8 +1723,7 @@ def meridian_loop():
                                         mrd.s_minitermnal_keep[i][1])
                                     print_string = print_string + \
                                         "["+str(int(mrd.s_minitermnal_keep[i][0]))+"] " + \
-                                        str(int(
-                                            mrd.s_minitermnal_keep[i][1]))+", "
+                                        str(int(mrd.s_minitermnal_keep[i][1]))+", "
                                     # サーボパワーオン時のキープ配列にも反映しておく. こうするとミニターミナルから脱力してサーボを回転させた後にサーボパワーオンで位置の固定ができる
                                     mrd.s_meridim_motion_keep_f[int(mrd.s_minitermnal_keep[i][0])] = int(
                                         mrd.s_minitermnal_keep[i][1]*0.01)
@@ -1853,10 +1803,10 @@ def meridian_loop():
                             mrd.error_count_esp_to_tsy/mrd.loop_count)) + " TsySKIP:"+str("{:.2%}".format(mrd.error_count_tsy_skip/mrd.loop_count)) + " ESPSKIP:" + str("{:.2%}".format(mrd.error_count_esp_skip/mrd.loop_count))
 
                         mrd.message4 = "SKIP COUNT Tsy:" + str("{:}".format(mrd.error_count_tsy_skip))+" ESP:"+str("{:}".format(mrd.error_count_esp_skip))+" PC:"+str("{:}".format(mrd.error_count_pc_skip)) + " Servo:"+str(
-                            "{:}".format(mrd.error_count_servo_skip))+" PCframe:"+str(mrd.loop_count)+" BOARDframe:"+str(mrd.frame_sync_r_resv)+" "+str(int(mrd.loop_count/now))+"Hz"
+                            "{:}".format(mrd.error_count_servo_skip))+" PCframe:"+str(mrd.loop_count)+" BOARDframe:"+str(mrd.frame_sync_r_recv)+" "+str(int(mrd.loop_count/now))+"Hz"
 
                         # 今回受信のシーケンス番号を次回比較用にキープ
-                        mrd.frame_sync_r_last = mrd.frame_sync_r_resv
+                        mrd.frame_sync_r_last = mrd.frame_sync_r_recv
 
 # ------------------------------------------------------------------------
 # [ 8 ] : シーケンス番号が更新されていなければ待機して[1-1]]に戻る
