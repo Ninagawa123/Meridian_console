@@ -29,11 +29,12 @@ $ pip install redis
   
 ```  
 $ CD ~/(Meridian_console.pyのあるディレクトリ)  
-$ python Meridian_console.py [送信先のESP32のIPアドレス 例:192.168.1.17]  
+$ python Meridian_console.py 
 ```  
   
-※送信先のIPアドレスを記入しない場合, board_ip.txtで設定された値で接続を試みます.    
-※IPアドレス情報が見つからない場合は, ターミナルで入力を促されます. 内容はboard_ip.txtに保存されます.  
+起動時にWiFi-DHCP, WiFi-固定IP, 有線LAN-固定IP の３種類から接続方法を選択できます.  
+特に何も設定せずにEnterキーで進めることで, 前回の設定をそのまま使用します.  
+入力したIPアドレス設定は, board_ip.txtに保存されます.  
   
 Windowsの場合, Meridian_console.pyの起動時に通信を許可するかどうかのダイアログボックスが出ることがあります. 許可とすることで実行が可能ですが, 実行できない場合は下記の設定を行なってください.  
 
@@ -117,8 +118,9 @@ ResetCounter: カウンタの値をリセットするボタンです.
 TsySKIP, PcSKIP: 連番データの取りこぼし数を表示します.  
 ※ ESP32にPS4リモコンを接続した際に受信スキップ回数が5%ほど検出されるのは,現在の仕様では正常な動作です.  
 ※ I2C接続のMerimoteを使用した場合, PS4リモコン接続での受信スキップ回数はほぼ0になります. 
+  
+#### Trim Setting Window  (2025.06現在, LITE版, TWIN版に対応)  
 
-#### Trim Setting Window  (2025.05.04現在, LITE版,TWIN版とも対応)
 [Axis Monitor]の [Trim]ボタンにより開きます. 実機を見ながらサーボのトリム値を調整し, EEPROMに保存することができます.  
 受信したサーボの角度を表示します.  
 
@@ -163,3 +165,4 @@ TsySKIP, PcSKIP: 連番データの取りこぼし数を表示します.
 2025.04.06 ESP32のwifiIPをboard_ip.txtに格納するようにし, 未設定時はターミナルで入力するようにしました.  
 2025.04.06 Redisの読み取り機能を追加しました.  
 2025.05.04 トリム調整モードを追加しました.  
+2025.06.13 起動時に WiFi-DHCP, WiFi-固定IP, 有線LAN-固定IP を選択できるようにしました.
