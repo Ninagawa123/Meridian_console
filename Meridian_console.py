@@ -16,6 +16,7 @@
 # 2025.04.06 マイコンボードのwifiIPアドレスをboard_ip.txtで設定するように変更.
 # 2025.04.29 Trimモードを追加. (2025.05.04修正)
 # 2025.06.13 有線LAN,固定IP等選択モード追加. (IP値の入力時にEnterキーで既存の値を使用できます)
+# 2026.06.28 Trimモードを修正中（UIも修正途中）
 
 # Meridian console 取扱説明書
 #
@@ -71,14 +72,14 @@
 # サーボ設定はEEPROMに保存されます
 #
 # 1.Power, Python, Enable の3箇所すべてにチェックを入れます
-# 2.[Start Trim Setting] ボタンを押します
-#   Board側のトリム値が0リセットされ, ウィンドウのスライダーにトリム値が反映されます
-# 3.実機を見ながら, トリム値を入力します
-#   スライダーもしくはインプットフィールドへの入力+Enter,もしくは-+ボタンでトリム値を調整します
-# 4.調整できたら,[Save to EEPROM]ボタンを押します. Board側にデータが送信され,EEPROMに登録されます
-# 5.[Load EEPROM to Board RAM]ボタンを押します. EEPROMからBoardにトリム値などが反映します
-#   この時, ロボット実機がトリムポーズではない位置に動く場合があります
-# 6.[Home]ボタンを押すと, サーボは新しいトリム値を基準とした0位置に移動します(トリムポーズ)
+# 2.[Prepare Trim] ボタンを押します
+#   サーボが現在のEEPROMトリム値に基づく物理HOMEへ移動し, Board内部のトリムが0リセットされます
+#   ウィンドウのスライダーに旧トリム値が表示されます(= サーボの現在物理位置)
+# 3.実機を見ながら, スライダーでトリム値を調整します
+#   スライダーの値がそのままサーボの物理位置になります
+# 4.調整できたら,[Save to EEPROM]ボタンを押します. 現在のスライダー値が新トリム値としてEEPROMに保存されます
+# 5.[Go to EEPROM Trim Position]ボタンを押すと, EEPROMのトリム値をオフセットとしてサーボが物理HOMEへ移動します
+# 6.[Go to Hard Origin]ボタンを押すと, トリムを無視してすべてのサーボが強制的に0°に移動します(緊急用)
 # 7.[Export Settings]ボタンを押すと, 最後にEEPROMに読み書きしたトリムデータがテキスト形式で出力されます
 #   出力ディレクトリはこのpythonコードと同じ場所になります. ファイル内容はMeridianのBoard用コードにコピペできる形式です
 # 8.設定が完了したら[close]ボタンを押して閉じます
@@ -117,7 +118,7 @@ except ImportError:
 sys.stdout.reconfigure(encoding='utf-8')
 
 # 定数
-TITLE_VERSION = "Meridian_Console_v25.0613" # DPGのウィンドウタイトル兼バージョン表示
+TITLE_VERSION = "Meridian_Console_v26.0628" # DPGのウィンドウタイトル兼バージョン表示
 UDP_RECV_PORT = 22222                       # 受信ポート
 UDP_SEND_PORT = 22224                       # 送信ポート
 MSG_SIZE = 90                               # Meridim配列の長さ(デフォルトは90)
@@ -154,6 +155,10 @@ MCMD_EEPROM_BOARDTOPC_DATA2 = 10202  # EEPROMの[2][x]をボードからPCにMer
 MCMD_EEPROM_PCTOBOARD_DATA0 = 10300  # EEPROMの[0][x]をPCからボードにMeridimで送信する
 MCMD_EEPROM_PCTOBOARD_DATA1 = 10301  # EEPROMの[1][x]をPCからボードにMeridimで送信する
 MCMD_EEPROM_PCTOBOARD_DATA2 = 10302  # EEPROMの[2][x]をPCからボードにMeridimで送信する
+EEP_W_L_SV = 110       # L servo config start word in EEPROM
+EEP_W_R_SV = 140       # R servo config start word in EEPROM
+EEP_FIXED_WORDS = 180
+EEP_INIT_ID = 0x55
 
 # ================================================================================================================
 # ---- 変数の宣言 -------------------------------------------------------------------------------------------------
@@ -244,6 +249,7 @@ class MeridianConsole:
         self.flag_disp_send = 0                   # ターミナルに送信データを表示する
         self.flag_disp_rcvd = 0                   # ターミナルに受信データを表示する
         self.flag_trim_window_open = False        # Trimウィンドウの表示状態を管理
+        self.flag_eeprom_to_ui = False            # EEPROMデータをメインスレッドでUIに反映するフラグ
         # サーボの回転方向フラグ配列(False=正回転, True=逆回転)
         self.servo_direction = {}
         # サーボのマウント情報(True=マウントあり, False=マウントなし)
@@ -251,6 +257,8 @@ class MeridianConsole:
         self.servo_id_values = {}                 # サーボIDの情報(0-255)
         self.servo_l_trim_values_loaded = {}      # EEPROMからLoadしたサーボのトリム値
         self.servo_r_trim_values_loaded = {}      # EEPROMからLoadしたサーボのトリム値
+        self.eeprom_full_buf = np.zeros(270, dtype=np.int16)  # 270-word full EEPROM buffer
+        self.special_command_queue = []           # queue for multi-packet special commands
 
         for i in range(MRD_SERVO_SLOTS):                        # 右側サーボの初期化
             self.servo_direction[f"L{i}"] = False  # 初期値は正回転(チェックなし)
@@ -432,19 +440,25 @@ def select_network_mode_and_ip(filename="board_ip.txt"):
 
 # Trim Setting ウィンドウを開く
 def open_trim_window():
-    if not mrd.flag_trim_window_open:
+    # flag_trim_window_open は DPG 外から閉じられると齟齬が生じるため,
+    # does_item_exist だけを信頼してウィンドウの存在を判定する
+    if dpg.does_item_exist("Trim Setting"):
+        dpg.configure_item("Trim Setting", show=True)
         mrd.flag_trim_window_open = True
-        print("Open Trim Setting window.")
-        create_trim_window()
+        print("Reopened Trim Setting window.")
     else:
-        print("Trim Setting window is already open.")
+        mrd.flag_trim_window_open = True
+        create_trim_window()
+        print("Open Trim Setting window.")
 
 # Trim Setting ウィンドウを閉じる
 
 
 def close_trim_window():
     mrd.flag_trim_window_open = False
-    dpg.delete_item("Trim Setting")
+    # delete_item は on_close から呼ぶと DPG の処理と競合するため show=False で非表示にする
+    if dpg.does_item_exist("Trim Setting"):
+        dpg.configure_item("Trim Setting", show=False)
     print("Closed Trim Setting window.")
 
 
@@ -464,28 +478,6 @@ def sync_python_from_trim(sender, app_data, user_data):
 def sync_enable_from_trim(sender, app_data, user_data):
     dpg.set_value("Enable", app_data)
     set_enable("Enable", app_data, None)
-
-
-# Trim Setting側のスライダーが動いた時の処理
-def set_servo_angle_from_trim(channel, app_data):
-    servo_ix = channel.replace("Trim_", "")
-
-    # Axis Monitor側のスライダーを更新
-    axis_slider_tag = f"ID {servo_ix}"
-    dpg.set_value(axis_slider_tag, app_data)
-
-    # サーボ位置の更新(トリム値がそのままサーボ位置として使用される)
-    if servo_ix.startswith("L"):
-        index = int(servo_ix[1:])
-        mrd.s_meridim[MRD_L_ORIG_IDX + 1 + index * 2] = int(app_data * 100)
-        mrd.s_meridim_motion_f[MRD_L_ORIG_IDX + 1 + index * 2] = app_data
-    elif servo_ix.startswith("R"):
-        index = int(servo_ix[1:])
-        mrd.s_meridim[MRD_R_ORIG_IDX + 1 + index * 2] = int(app_data * 100)
-        mrd.s_meridim_motion_f[MRD_R_ORIG_IDX + 1 + index * 2] = app_data
-
-    print(
-        f"Trim setting for {servo_ix} changed to {app_data}, servo moving to this position")
 
 
 # インプットフィールドの値をスライダーに適用する
@@ -540,6 +532,38 @@ def apply_trim_input_value(sender, app_data, user_data):
 
 
 # EEPROMへの保存
+def reset_config_to_default():
+    """Trim設定のサーボ設定(Mt/ID/Rev)をデフォルト値にリセットする. Trim値はそのまま保持."""
+    for i in range(MRD_SERVO_SLOTS):
+        l_key = f"L{i}"
+        r_key = f"R{i}"
+        default_mount = (i <= 10)  # 0-10 はマウントあり, 11-14 はなし
+
+        mrd.servo_mount[l_key] = default_mount
+        mrd.servo_id_values[l_key] = i
+        mrd.servo_direction[l_key] = False
+
+        mrd.servo_mount[r_key] = default_mount
+        mrd.servo_id_values[r_key] = i
+        mrd.servo_direction[r_key] = False
+
+        if dpg.does_item_exist(f"Mount_{l_key}"):
+            dpg.set_value(f"Mount_{l_key}", default_mount)
+        if dpg.does_item_exist(f"ID_{l_key}"):
+            dpg.set_value(f"ID_{l_key}", str(i))
+        if dpg.does_item_exist(f"Direction_{l_key}"):
+            dpg.set_value(f"Direction_{l_key}", False)
+
+        if dpg.does_item_exist(f"Mount_{r_key}"):
+            dpg.set_value(f"Mount_{r_key}", default_mount)
+        if dpg.does_item_exist(f"ID_{r_key}"):
+            dpg.set_value(f"ID_{r_key}", str(i))
+        if dpg.does_item_exist(f"Direction_{r_key}"):
+            dpg.set_value(f"Direction_{r_key}", False)
+
+    print("Servo config (Mt/ID/Rev) reset to defaults. Trim values preserved.")
+
+
 def save_trimdata_to_eeprom():
     # Board側にサーボのトリム値と設定(ID, マウント, 回転方向)をEEPROMに保存させる
 
@@ -560,7 +584,7 @@ def save_trimdata_to_eeprom():
 
         # 回転方向 (bit8)
         is_reverse = mrd.servo_direction[l_servo_ix]
-        if not is_reverse:  # 逆転の場合はビット8を立てる (1=逆転, 0=正転)
+        if not is_reverse:  # 正転の場合はビット8を立てる (1=正転, 0=逆転)
             l_settings |= 0x100
 
         # int16の範囲内に収まるように調整
@@ -571,9 +595,9 @@ def save_trimdata_to_eeprom():
         mrd.s_meridim_special[MRD_L_ORIG_IDX + i * 2] = l_settings
 
         # トリム値の設定
-        if mrd.flag_trim_window_open and dpg.does_item_exist(f"Trim_{l_servo_ix}"):
+        trim_val = 0.0
+        if dpg.does_item_exist(f"Trim_{l_servo_ix}"):
             trim_val = dpg.get_value(f"Trim_{l_servo_ix}")
-            # xxxx  + mrd.servo_l_trim_values_loaded[i]
             mrd.s_meridim_special[MRD_L_ORIG_IDX +
                                   1 + i * 2] = int(trim_val * 100)
 
@@ -599,7 +623,7 @@ def save_trimdata_to_eeprom():
 
         # 回転方向 (bit8)
         is_reverse = mrd.servo_direction[r_servo_ix]
-        if not is_reverse:  # 正転の場合はビット8を立てる (1=逆転, 0=正転)
+        if not is_reverse:  # 正転の場合はビット8を立てる (1=正転, 0=逆転)
             r_settings |= 0x100
 
         # int16の範囲内に収まるように調整
@@ -610,9 +634,9 @@ def save_trimdata_to_eeprom():
         mrd.s_meridim_special[MRD_R_ORIG_IDX + i * 2] = r_settings
 
         # トリム値の設定
-        if mrd.flag_trim_window_open and dpg.does_item_exist(f"Trim_{r_servo_ix}"):
+        trim_val = 0.0
+        if dpg.does_item_exist(f"Trim_{r_servo_ix}"):
             trim_val = dpg.get_value(f"Trim_{r_servo_ix}")
-            # xxxx  + mrd.servo_r_trim_values_loaded[i]
             mrd.s_meridim_special[MRD_R_ORIG_IDX +
                                   1 + i * 2] = int(trim_val * 100)
 
@@ -632,48 +656,41 @@ def save_trimdata_to_eeprom():
     print("Command sent: Save trim and settings to EEPROM (10101)")
 
 
-# EEPROMからBoardへデータを読み込ませる ####
-def load_trimdata_from_eeprom_to_board():
-    # Meridimのマスターコマンド10102を送信するための処理
+# EEPROM全3行をボードから順次取得するコマンドをキューに入れる
+def request_all_eeprom_from_board():
+    for cmd in [MCMD_EEPROM_BOARDTOPC_DATA0, MCMD_EEPROM_BOARDTOPC_DATA1, MCMD_EEPROM_BOARDTOPC_DATA2]:
+        packet = np.zeros(MSG_SIZE, dtype=np.int16)
+        packet[MRD_MASTER] = np.int16(cmd if cmd <= 32767 else cmd - 65536)
+        mrd.special_command_queue.append(packet)
+    print("Queued 3 EEPROM read requests.")
 
-    # Meridim配列を受信値で初期化
-    # mrd.s_meridim_special = mrd.r_meridim
 
-    # 特殊コマンドのデータ用のMeridim配列を初期化
+# EEPROMのtrim値をボードに適用しサーボをHOMEへ移動する (10102)
+# PCは全サーボ位置0を送信し、ESP32がEEPROMのtrim値を内部オフセットとして使用する
+def go_to_eeprom_trim_position():
     mrd.s_meridim_special = np.zeros(MSG_SIZE, dtype=np.int16)
 
-    # 受信データを特殊コマンド用の配列に転記(現在のサーボ値をそのまま使う)
     for i in range(MSG_SIZE):
         mrd.s_meridim_special[i] = mrd.r_meridim[i]
 
-    # Meridim配列の全サーボ位置に0を入れて送信 ####
+    # 全サーボ位置を0として送信 (ESP32内部でtrimオフセットを加算して物理位置に変換)
     for i in range(MRD_SERVO_SLOTS):
-        left_ix = MRD_L_ORIG_IDX + 1 + i * 2
-        right_ix = MRD_R_ORIG_IDX + 1 + i * 2
+        mrd.s_meridim_special[MRD_L_ORIG_IDX + 1 + i * 2] = 0
+        mrd.s_meridim_special[MRD_R_ORIG_IDX + 1 + i * 2] = 0
 
-        mrd.s_meridim_special[left_ix] = 0
-        mrd.s_meridim_special[right_ix] = 0
-
-    # マスターコマンドを設定
     mrd.s_meridim_special[MRD_MASTER] = MCMD_EEPROM_LOAD_TRIM
-
-    # スライダーの値も0にリセット
-    for i in range(MRD_SERVO_SLOTS):
-        # Axis Monitorのスライダーをリセット
-        dpg.set_value(f"ID L{i}", 0)
-        dpg.set_value(f"ID R{i}", 0)
-
-        # Trim Settingウィンドウが開いている場合は, そのスライダーも更新
-        if mrd.flag_trim_window_open:
-            if dpg.does_item_exist(f"Trim_L{i}"):
-                dpg.set_value(f"Trim_L{i}", 0)
-            if dpg.does_item_exist(f"Trim_R{i}"):
-                dpg.set_value(f"Trim_R{i}", 0)
-
-    # 特殊コマンド送信のフラグを立てる
     mrd.flag_special_command_send = 1
 
-    print("Command sent: Load trim data from EEPROM to board (10102)")
+    # PCのスライダーも0にリセット (ESP32側がオフセット管理するためPC側は0が正)
+    for i in range(MRD_SERVO_SLOTS):
+        dpg.set_value(f"ID L{i}", 0)
+        dpg.set_value(f"ID R{i}", 0)
+        if dpg.does_item_exist(f"Trim_L{i}"):
+            dpg.set_value(f"Trim_L{i}", 0)
+        if dpg.does_item_exist(f"Trim_R{i}"):
+            dpg.set_value(f"Trim_R{i}", 0)
+
+    print("Command sent: Go to EEPROM Trim Position (10102)")
 
 
 # サーボの回転方向フラグを切り替える処理
@@ -743,17 +760,6 @@ def process_eeprom_data():
 
         print(f"{l_servo_key} - ID: {l_servo_ix}, Mt: {'1' if l_mount else '0'}, Dir: {'Rev ' if l_is_reverse else 'Norm'}, Trim: {l_trim_val}")
 
-        # Trim Settingウィンドウが開いている場合, UI要素を更新
-        if mrd.flag_trim_window_open:
-            if dpg.does_item_exist(f"Direction_{l_servo_key}"):
-                dpg.set_value(f"Direction_{l_servo_key}", l_is_reverse)
-            if dpg.does_item_exist(f"Mount_{l_servo_key}"):
-                dpg.set_value(f"Mount_{l_servo_key}", l_mount)
-            if dpg.does_item_exist(f"ID_{l_servo_key}"):
-                dpg.set_value(f"ID_{l_servo_key}", str(l_servo_ix))
-            if dpg.does_item_exist(f"Trim_{l_servo_key}"):
-                dpg.set_value(f"Trim_{l_servo_key}", l_trim_val)
-
         # R系統サーボの処理
         r_settings = mrd.r_meridim[MRD_R_ORIG_IDX + i * 2]
         r_trim_val = mrd.r_meridim[MRD_R_ORIG_IDX + 1 + i * 2] * 0.01
@@ -781,39 +787,10 @@ def process_eeprom_data():
 
         print(f"{r_servo_key} - ID: {r_servo_ix}, Mt: {'1' if r_mount else '0'}, Dir: {'Rev ' if r_is_reverse else 'Norm'}, Trim: {r_trim_val}")
 
-        # Trim Settingウィンドウが開いている場合, UI要素を更新
-        if mrd.flag_trim_window_open:
-            if dpg.does_item_exist(f"Direction_{r_servo_key}"):
-                dpg.set_value(f"Direction_{r_servo_key}", r_is_reverse)
-            if dpg.does_item_exist(f"Mount_{r_servo_key}"):
-                dpg.set_value(f"Mount_{r_servo_key}", r_mount)
-            if dpg.does_item_exist(f"ID_{r_servo_key}"):
-                dpg.set_value(f"ID_{r_servo_key}", str(r_servo_ix))
-            if dpg.does_item_exist(f"Trim_{r_servo_key}"):
-                dpg.set_value(f"Trim_{r_servo_key}", r_trim_val)
-
-    # 読み込んだトリム値をサーボ位置にも反映する  ★試すのみ
-    if mrd.flag_servo_power:  # サーボパワーがオンの場合のみ適用
-        for i in range(MRD_SERVO_SLOTS):
-            # 左側サーボ
-            l_trim_val = mrd.r_meridim[MRD_L_ORIG_IDX + 1 + i * 2] * 0.01
-            mrd.s_meridim[MRD_L_ORIG_IDX + 1 + i *
-                          2] = mrd.r_meridim[MRD_L_ORIG_IDX + 1 + i * 2]
-            mrd.s_meridim_motion_f[MRD_L_ORIG_IDX + 1 + i * 2] = l_trim_val
-            # Axis Monitorのスライダーも更新
-            dpg.set_value(f"ID L{i}", l_trim_val)
-
-            # 右側サーボ
-            r_trim_val = mrd.r_meridim[MRD_R_ORIG_IDX + 1 + i * 2] * 0.01
-            mrd.s_meridim[MRD_R_ORIG_IDX + 1 + i *
-                          2] = mrd.r_meridim[MRD_R_ORIG_IDX + 1 + i * 2]
-            mrd.s_meridim_motion_f[MRD_R_ORIG_IDX + 1 + i * 2] = r_trim_val
-            # Axis Monitorのスライダーも更新
-            dpg.set_value(f"ID R{i}", r_trim_val)
-
     mrd.k_meridim_eeprom_last = mrd.r_meridim  # 受信したEEPROMの値を出力用にキープ
+    mrd.flag_eeprom_to_ui = True  # メインスレッドにUI更新を委譲
 
-    print("EEPROM data loaded to Trim Settings window and applied to servos.")
+    print("EEPROM data ready. UI will be updated in main thread.")
 
 
 # サーボのマウント有無を切り替える
@@ -848,7 +825,7 @@ def set_servo_id(sender, app_data, user_data):
         print(f"Invalid input. Servo ID must be a number.")
 
 
-# Start Trim Settingボタンの処理
+# [Prepare Trim] ボタンの処理
 def start_trim_setting():
     # トリム設定モードを開始するために, マスターコマンドとしてMCMD_START_TRIM_SETTINGを送信する
 
@@ -865,7 +842,7 @@ def start_trim_setting():
     # 特殊コマンド送信のフラグを立てる
     mrd.flag_special_command_send = 1
 
-    print("Command sent: Start Trim Setting Mode (10100)")
+    print("Command sent: Prepare Trim (10100)")
 
 # 整数値から特定の位置と長さでビットを抽出する関数
 
@@ -1182,12 +1159,15 @@ def create_trim_window():
                     pos=[10, 10], on_close=close_trim_window):
 
         # --- 上部コントロールエリア -------------------------------------------------
+        # 行1: [Prepare Trim] □Power □Python □Enable [Save to EEPROM] [Go to Hard Origin]
+        # 行2: [Read EEPROM] [Go to EEPROM Trim Position] [Stop Trim Setting]  [Export Settings]
         power_state = dpg.get_value("Power")
         python_state = dpg.get_value("python")
         enable_state = dpg.get_value("Enable")
 
-        dpg.add_button(label="Start Trim Setting",
-                       callback=start_trim_setting, pos=[15, 35], width=140)
+        # 行1
+        dpg.add_button(label="Prepare Trim",
+                       callback=start_trim_setting, pos=[15, 35], width=120)
 
         dpg.add_checkbox(label="Power",  tag="Power_Trim", default_value=power_state,
                          pos=[viewport_width//2-250, 35], callback=sync_power_from_trim)
@@ -1196,14 +1176,20 @@ def create_trim_window():
         dpg.add_checkbox(label="Enable", tag="Enable_Trim", default_value=enable_state,
                          pos=[viewport_width//2-110, 35], callback=sync_enable_from_trim)
 
-        dpg.add_button(label="Save to EEPROM", callback=save_trimdata_to_eeprom, pos=[
-                       viewport_width//2-10, 35], width=125)
-        dpg.add_button(label="Load EEPROM to Board RAM", callback=load_trimdata_from_eeprom_to_board,
-                       pos=[viewport_width//2+125, 35], width=180)
+        dpg.add_button(label="Save to EEPROM", callback=save_trimdata_to_eeprom,
+                       pos=[viewport_width//2-10, 35], width=125)
+        dpg.add_button(label="Go to Hard Origin", callback=set_trim_home,
+                       pos=[viewport_width//2+125, 35], width=145)
 
-        dpg.add_button(label="Home", callback=set_trim_home,
-                       pos=[viewport_width//2+315, 35], width=60)
-
+        # 行2
+        dpg.add_button(label="Read EEPROM", callback=request_all_eeprom_from_board,
+                       pos=[15, 62], width=115)
+        dpg.add_button(label="Reset Config", callback=reset_config_to_default,
+                       pos=[140, 62], width=105)
+        dpg.add_button(label="Go to EEPROM Trim Position", callback=go_to_eeprom_trim_position,
+                       pos=[255, 62], width=200)
+        dpg.add_button(label="Stop Trim Setting",
+                       callback=close_trim_window, pos=[465, 62], width=140)
         dpg.add_button(label="Export Settings", callback=export_settings_to_file,
                        pos=[viewport_width//2+250, 62], width=125)
 
@@ -1485,18 +1471,21 @@ def meridian_loop():
                     if (mrd.r_meridim[MRD_MASTER] > MSG_SIZE):
 
                         if mrd.r_meridim[MRD_MASTER] == MCMD_EEPROM_BOARDTOPC_DATA0:
-                            print('rcvd EEPROM[0][*]:' +
-                                  ' '.join(map(str, mrd.r_meridim)))
+                            print('rcvd EEPROM[0][*]:' + ' '.join(map(str, mrd.r_meridim)))
+                            for i in range(1, MSG_SIZE - 1):  # positions 1..88 → EEPROM words 1..88
+                                mrd.eeprom_full_buf[i] = mrd.r_meridim[i]
 
                         if mrd.r_meridim[MRD_MASTER] == MCMD_EEPROM_BOARDTOPC_DATA1:
-                            print('rcvd EEPROM[1][*]:' +
-                                  ' '.join(map(str, mrd.r_meridim)))
+                            print('rcvd EEPROM[1][*]:' + ' '.join(map(str, mrd.r_meridim)))
+                            for i in range(1, MSG_SIZE - 1):  # positions 1..88 → EEPROM words 91..178
+                                mrd.eeprom_full_buf[90 + i] = mrd.r_meridim[i]
                             # EEPROMからのデータを処理してチェックボックスに反映
                             process_eeprom_data()
 
                         if mrd.r_meridim[MRD_MASTER] == MCMD_EEPROM_BOARDTOPC_DATA2:
-                            print('rcvd EEPROM[2][*]:' +
-                                  ' '.join(map(str, mrd.r_meridim)))
+                            print('rcvd EEPROM[2][*]:' + ' '.join(map(str, mrd.r_meridim)))
+                            for i in range(1, MSG_SIZE - 1):  # positions 1..88 → EEPROM words 181..268
+                                mrd.eeprom_full_buf[180 + i] = mrd.r_meridim[i]
 
                         mrd.s_meridim[MRD_MASTER] = 90
 
@@ -1738,8 +1727,18 @@ def meridian_loop():
                                 mrd.flag_send_miniterminal_data_once = 0
 
 # [ 5-10 ] : 特殊コマンドのデータ送信処理
-                    # 特殊コマンド送信モードの判定 [6-2]で完了処理
-                    if mrd.flag_special_command_send > 0:
+                    # キューがあれば先頭パケットを使用, なければspecial配列を使用 [6-2]で完了処理
+                    if len(mrd.special_command_queue) > 0:
+                        packet = mrd.special_command_queue.pop(0)
+                        for i in range(MSG_SIZE):
+                            mrd.s_meridim[i] = packet[i]
+                        # シーケンス番号をframe_sync_sで更新 (ESP32のシーケンスチェックを通過させる)
+                        if mrd.frame_sync_s > 32767:
+                            mrd.s_meridim[1] = mrd.frame_sync_s - 65536
+                        else:
+                            mrd.s_meridim[1] = mrd.frame_sync_s
+                        mrd.flag_special_command_send = 1
+                    elif mrd.flag_special_command_send > 0:
                         for i in range(MSG_SIZE):
                             mrd.s_meridim[i] = mrd.s_meridim_special[i]
 
@@ -1772,8 +1771,8 @@ def meridian_loop():
                     sock.sendto(s_bin_data, (UDP_SEND_IP,
                                 UDP_SEND_PORT))  # UDP送信
                     now = time.time()-mrd.start+0.0001
-    # [ 6-2 ] : 特殊コマンドのデータ送信の完了処理
-                    if mrd.flag_special_command_send > 0:
+    # [ 6-2 ] : 特殊コマンドのデータ送信の完了処理(キューが空のときのみクリア)
+                    if mrd.flag_special_command_send > 0 and len(mrd.special_command_queue) == 0:
                         mrd.s_meridim_special = np.zeros(
                             MSG_SIZE, dtype=np.int16)  # 特殊コマンド用のデータをクリア
                         mrd.flag_special_command_send = 0  # 特殊コマンドの送信フラグを下げる
@@ -1847,18 +1846,10 @@ def set_servo_angle(channel, app_data):
         mrd.s_meridim_motion_f[int(channel[4:6])*2+21] = app_data
         print(f"L{channel[4:6]}[{int(channel[4:6])*2+21}]:{int(app_data*100)}")
 
-        # Trim Settingウィンドウが開かれている場合は, 対応するスライダーを更新
-        if mrd.flag_trim_window_open and dpg.does_item_exist(f"Trim_L{channel[4:6]}"):
-            dpg.set_value(f"Trim_L{channel[4:6]}", app_data)
-
     if channel[3] == "R":
         mrd.s_meridim[int(channel[4:6])*2+51] = int(app_data * 100)
         mrd.s_meridim_motion_f[int(channel[4:6])*2+51] = app_data
         print(f"R{channel[4:6]}[{int(channel[4:6])*2+51}]:{int(app_data*100)}")
-
-        # Trim Settingウィンドウが開かれている場合は, 対応するスライダーを更新
-        if mrd.flag_trim_window_open and dpg.does_item_exist(f"Trim_R{channel[4:6]}"):
-            dpg.set_value(f"Trim_R{channel[4:6]}", app_data)
 
 
 # [Axis Monitor] ウィンドウのTarget, Actual 切り替えラジオボタン処理
@@ -2352,6 +2343,30 @@ def main():
                         dpg.set_value("mpu"+str(i), _idsensor)
                     else:
                         dpg.set_value("mpu"+str(i), _idsensor*100)
+
+            # EEPROMデータをTrimウィンドウに反映 (メインスレッドでのみ実行)
+            if mrd.flag_eeprom_to_ui:
+                mrd.flag_eeprom_to_ui = False
+                for _ei in range(MRD_SERVO_SLOTS):
+                    _lk = f"L{_ei}"
+                    _rk = f"R{_ei}"
+                    if dpg.does_item_exist(f"Trim_{_lk}"):
+                        dpg.set_value(f"Trim_{_lk}", mrd.servo_l_trim_values_loaded[_ei])
+                    if dpg.does_item_exist(f"Trim_{_rk}"):
+                        dpg.set_value(f"Trim_{_rk}", mrd.servo_r_trim_values_loaded[_ei])
+                    if dpg.does_item_exist(f"Mount_{_lk}"):
+                        dpg.set_value(f"Mount_{_lk}", mrd.servo_mount[_lk])
+                    if dpg.does_item_exist(f"Mount_{_rk}"):
+                        dpg.set_value(f"Mount_{_rk}", mrd.servo_mount[_rk])
+                    if dpg.does_item_exist(f"Direction_{_lk}"):
+                        dpg.set_value(f"Direction_{_lk}", mrd.servo_direction[_lk])
+                    if dpg.does_item_exist(f"Direction_{_rk}"):
+                        dpg.set_value(f"Direction_{_rk}", mrd.servo_direction[_rk])
+                    if dpg.does_item_exist(f"ID_{_lk}"):
+                        dpg.set_value(f"ID_{_lk}", str(mrd.servo_id_values[_lk]))
+                    if dpg.does_item_exist(f"ID_{_rk}"):
+                        dpg.set_value(f"ID_{_rk}", str(mrd.servo_id_values[_rk]))
+                print("EEPROM data applied to Trim window.")
 
             # リモコンデータの表示更新
             pad_button_short = np.array([0], dtype=np.uint16)
