@@ -14,9 +14,9 @@
 # 2024.04.30 L2R2ボタンのアナログ値の表示を修正.
 # 2025.01.26 genesis用のRedis入力を追加. POWERとRedisをチェックで動作.
 # 2025.04.06 マイコンボードのwifiIPアドレスをboard_ip.txtで設定するように変更.
-# 2025.04.29 Trimモードを追加. (2025.05.04修正)
+# 2025.04.29 Trimモードを追加. 
 # 2025.06.13 有線LAN,固定IP等選択モード追加. (IP値の入力時にEnterキーで既存の値を使用できます)
-# 2026.06.28 Trimモードを修正中（UIも修正途中）
+# 2026.06.30 TrimモードのUIを更新.
 
 # Meridian console 取扱説明書
 #
@@ -72,14 +72,14 @@
 # サーボ設定はEEPROMに保存されます
 #
 # 1.Power, Python, Enable の3箇所すべてにチェックを入れます
-# 2.[Prepare Trim] ボタンを押します
-#   サーボが現在のEEPROMトリム値に基づく物理HOMEへ移動し, Board内部のトリムが0リセットされます
-#   ウィンドウのスライダーに旧トリム値が表示されます(= サーボの現在物理位置)
-# 3.実機を見ながら, スライダーでトリム値を調整します
-#   スライダーの値がそのままサーボの物理位置になります
-# 4.調整できたら,[Save to EEPROM]ボタンを押します. 現在のスライダー値が新トリム値としてEEPROMに保存されます
-# 5.[Go to EEPROM Trim Position]ボタンを押すと, EEPROMのトリム値をオフセットとしてサーボが物理HOMEへ移動します
-# 6.[Go to Hard Origin]ボタンを押すと, トリムを無視してすべてのサーボが強制的に0°に移動します(緊急用)
+# 2.[Start Trim Setting] ボタンを押します
+#   Board側のトリム値が0リセットされ, ウィンドウのスライダーにトリム値が反映されます
+# 3.実機を見ながら, トリム値を入力します
+#   スライダーもしくはインプットフィールドへの入力+Enter,もしくは-+ボタンでトリム値を調整します
+# 4.調整できたら,[Save to EEPROM]ボタンを押します. Board側にデータが送信され,EEPROMに登録されます
+# 5.[Load EEPROM to Board RAM]ボタンを押します. EEPROMからBoardにトリム値などが反映します
+#   この時, ロボット実機がトリムポーズではない位置に動く場合があります
+# 6.[Home]ボタンを押すと, サーボは新しいトリム値を基準とした0位置に移動します(トリムポーズ)
 # 7.[Export Settings]ボタンを押すと, 最後にEEPROMに読み書きしたトリムデータがテキスト形式で出力されます
 #   出力ディレクトリはこのpythonコードと同じ場所になります. ファイル内容はMeridianのBoard用コードにコピペできる形式です
 # 8.設定が完了したら[close]ボタンを押して閉じます
@@ -92,6 +92,7 @@
 import sys
 import numpy as np
 import socket
+import select as _select
 from contextlib import closing
 import struct
 import math
@@ -100,10 +101,10 @@ import threading
 import signal
 import time
 import atexit
-import struct
 import os
 import re
-import redis  # Redis用ライブラリ
+import valkey as redis  # Valkey用ライブラリ (valkey.Valkey = redis.Redis 互換)
+import subprocess
 
 # ROS搭載マシンの場合はrospyをインポートする
 try:
@@ -118,7 +119,7 @@ except ImportError:
 sys.stdout.reconfigure(encoding='utf-8')
 
 # 定数
-TITLE_VERSION = "Meridian_Console_v26.0628" # DPGのウィンドウタイトル兼バージョン表示
+TITLE_VERSION = "Meridian_Console_v26.0702" # DPGのウィンドウタイトル兼バージョン表示
 UDP_RECV_PORT = 22222                       # 受信ポート
 UDP_SEND_PORT = 22224                       # 送信ポート
 MSG_SIZE = 90                               # Meridim配列の長さ(デフォルトは90)
@@ -134,7 +135,8 @@ MRD_SERVO_SLOTS = 15
 # Redisサーバー設定
 REDIS_HOST = "localhost"
 REDIS_PORT = 6379
-REDIS_KEY = "meridis"
+REDIS_KEY_READ = "meridis_calc_pub"   # <- Redis: 受信キー
+REDIS_KEY_WRITE = "meridis_real_pub"  # -> Redis: 送信キー
 
 # マスターコマンド
 MRD_MASTER = 0                      # マスターコマンドのMeridim配列での位置
@@ -155,10 +157,97 @@ MCMD_EEPROM_BOARDTOPC_DATA2 = 10202  # EEPROMの[2][x]をボードからPCにMer
 MCMD_EEPROM_PCTOBOARD_DATA0 = 10300  # EEPROMの[0][x]をPCからボードにMeridimで送信する
 MCMD_EEPROM_PCTOBOARD_DATA1 = 10301  # EEPROMの[1][x]をPCからボードにMeridimで送信する
 MCMD_EEPROM_PCTOBOARD_DATA2 = 10302  # EEPROMの[2][x]をPCからボードにMeridimで送信する
-EEP_W_L_SV = 110       # L servo config start word in EEPROM
-EEP_W_R_SV = 140       # R servo config start word in EEPROM
-EEP_FIXED_WORDS = 180
-EEP_INIT_ID = 0x55
+
+# ================================================================================================================
+# ---- Redis クラス (RedisReceiver / RedisTransfer) ---------------------------------------------------------------
+# ================================================================================================================
+
+class RedisReceiver:
+    """Redisからhash形式でデータを受信するクラス。"""
+    def __init__(self, host=REDIS_HOST, port=REDIS_PORT, redis_key=REDIS_KEY_READ,
+                 connect_timeout: float = 0.5, socket_timeout: float = 0.5):
+        import socket as _socket
+        self.host = host
+        self.port = port
+        self.redis_key = redis_key
+        self.is_connected = False
+        self._sock_mod = _socket
+        self.redis_client = redis.Valkey(
+            host=host, port=port, decode_responses=True,
+            socket_connect_timeout=connect_timeout,
+            socket_timeout=socket_timeout)
+        try:
+            conn = _socket.create_connection((host, port), timeout=connect_timeout)
+            conn.close()
+            self.redis_client.ping()
+            self.is_connected = True
+        except Exception as e:
+            print(f"[RedisReceiver] Could not connect: {e}")
+
+    def get_data(self, key=None):
+        """指定キーからhash形式で90要素のfloatリストを取得して返す。失敗時はNone。"""
+        if not self.is_connected:
+            return None
+        redis_key = key if key is not None else self.redis_key
+        try:
+            data = self.redis_client.hgetall(redis_key)
+            if not data:
+                print(f"[RedisReceiver] No data for key '{redis_key}'.")
+                return None
+            return [float(data[str(i)]) for i in range(len(data))]
+        except (redis.ConnectionError, KeyError, ValueError) as e:
+            print(f"[RedisReceiver] Error: {e}")
+            return None
+
+    def close(self):
+        if self.redis_client:
+            try:
+                self.redis_client.close()
+            except Exception:
+                pass
+
+
+class RedisTransfer:
+    """Redisへhash形式でデータを送信するクラス。"""
+    def __init__(self, host=REDIS_HOST, port=REDIS_PORT, redis_key=REDIS_KEY_WRITE,
+                 connect_timeout: float = 0.5, socket_timeout: float = 0.5):
+        import socket as _socket
+        self.host = host
+        self.port = port
+        self.redis_key = redis_key
+        self.is_connected = False
+        self.redis_client = redis.Valkey(
+            host=host, port=port, decode_responses=True,
+            socket_connect_timeout=connect_timeout,
+            socket_timeout=socket_timeout)
+        try:
+            conn = _socket.create_connection((host, port), timeout=connect_timeout)
+            conn.close()
+            self.redis_client.ping()
+            self.is_connected = True
+            if not self.redis_client.exists(redis_key):
+                self.redis_client.hset(redis_key, mapping={str(i): "0" for i in range(90)})
+        except Exception as e:
+            print(f"[RedisTransfer] Could not connect: {e}")
+
+    def set_data(self, data, key=None):
+        """90要素のリストをhash形式でRedisに書き込む。"""
+        if not self.is_connected or data is None or len(data) != 90:
+            return
+        redis_key = key if key is not None else self.redis_key
+        try:
+            mapping = {str(i): str(float(v)) for i, v in enumerate(data)}
+            self.redis_client.hset(redis_key, mapping=mapping)
+        except redis.RedisError as e:
+            print(f"[RedisTransfer] Error: {e}")
+
+    def close(self):
+        if self.redis_client:
+            try:
+                self.redis_client.close()
+            except Exception:
+                pass
+
 
 # ================================================================================================================
 # ---- 変数の宣言 -------------------------------------------------------------------------------------------------
@@ -189,11 +278,14 @@ class MeridianConsole:
             MSG_SIZE, dtype=float)      # PC側で作成したサーボ位置送信用
         self.s_meridim_motion_keep_f = np.zeros(
             MSG_SIZE, dtype=float)  # PC側で作成したサーボ位置キープ用
-        self.s_minitermnal_keep = np.zeros(
+        self.s_miniterminal_keep = np.zeros(
             (8, 2))                     # コンパネからのリモコン入力用
         for i in range(8):
             # 該当しないデータにはインデックスに-1を指定して送信データに反映されないようにしておく
-            self.s_minitermnal_keep[i][0] = -1
+            self.s_miniterminal_keep[i][0] = -1
+
+        # 終了制御
+        self.running = True              # Falseでmeridian_loopを停止
 
         # エラー集計表示用変数
         self.loop_count = 1              # フレーム数のカウンタ
@@ -235,9 +327,11 @@ class MeridianConsole:
         self.flag_ros1 = 0                        # ROS1の起動init(初回のみ)
         self.flag_ros1_pub = 0                    # ROS1のjoint_statesのパブリッシュ
         self.flag_ros1_sub = 0                    # ROS1のjoint_statesのサブスクライブ
+        self.flag_self_mode = False               # Selfモード: UDP受信を無視して100Hzで動作
+        self.flag_redis_pub = False               # RedisへのデータパブリッシュON/OFF
         self.flag_redis_sub = False               # Redisデータのサブスクライブ
         self.flag_set_flow_or_step = 1            # Meridianの循環を+:通常フロー, -:ステップ に切り替え
-        self.flag_servo_home = 0                  # 全サーボ位置をゼロリセット
+        self.flag_servo_zero = 0                  # 全サーボ位置をゼロリセット
         self.flag_stop_flow = False               # ステップモード中の待機フラグ
         self.flag_allow_flow = False              # ステップモード中に1回データを流すフラグ
         # Axis monitorの表示 1:送信データ(target) 0:受信データ(actual)
@@ -249,16 +343,11 @@ class MeridianConsole:
         self.flag_disp_send = 0                   # ターミナルに送信データを表示する
         self.flag_disp_rcvd = 0                   # ターミナルに受信データを表示する
         self.flag_trim_window_open = False        # Trimウィンドウの表示状態を管理
-        self.flag_eeprom_to_ui = False            # EEPROMデータをメインスレッドでUIに反映するフラグ
         # サーボの回転方向フラグ配列(False=正回転, True=逆回転)
         self.servo_direction = {}
         # サーボのマウント情報(True=マウントあり, False=マウントなし)
         self.servo_mount = {}
         self.servo_id_values = {}                 # サーボIDの情報(0-255)
-        self.servo_l_trim_values_loaded = {}      # EEPROMからLoadしたサーボのトリム値
-        self.servo_r_trim_values_loaded = {}      # EEPROMからLoadしたサーボのトリム値
-        self.eeprom_full_buf = np.zeros(270, dtype=np.int16)  # 270-word full EEPROM buffer
-        self.special_command_queue = []           # queue for multi-packet special commands
 
         for i in range(MRD_SERVO_SLOTS):                        # 右側サーボの初期化
             self.servo_direction[f"L{i}"] = False  # 初期値は正回転(チェックなし)
@@ -272,8 +361,6 @@ class MeridianConsole:
         self.message0 = "This PC's IP adress is "+UDP_RECV_IP_DEF
         self.message1 = ""
         self.message2 = ""
-        self.message3 = ""
-        self.message4 = ""
         self.message3 = ""
         self.message4 = ""
 
@@ -338,7 +425,6 @@ def check_valid_ip(ip):  # IPアドレスの書式確認
 
 
 def select_network_mode_and_ip(filename="board_ip.txt"):
-    import re
     script_dir = os.path.dirname(os.path.abspath(__file__))
     filepath = os.path.join(script_dir, filename)
     # デフォルト値
@@ -440,25 +526,23 @@ def select_network_mode_and_ip(filename="board_ip.txt"):
 
 # Trim Setting ウィンドウを開く
 def open_trim_window():
-    # flag_trim_window_open は DPG 外から閉じられると齟齬が生じるため,
-    # does_item_exist だけを信頼してウィンドウの存在を判定する
-    if dpg.does_item_exist("Trim Setting"):
-        dpg.configure_item("Trim Setting", show=True)
+    if not mrd.flag_trim_window_open:
         mrd.flag_trim_window_open = True
-        print("Reopened Trim Setting window.")
-    else:
-        mrd.flag_trim_window_open = True
-        create_trim_window()
         print("Open Trim Setting window.")
+        create_trim_window()
+    else:
+        print("Trim Setting window is already open.")
 
 # Trim Setting ウィンドウを閉じる
 
 
 def close_trim_window():
-    mrd.flag_trim_window_open = False
-    # delete_item は on_close から呼ぶと DPG の処理と競合するため show=False で非表示にする
+    if not mrd.flag_trim_window_open:  # on_close二重呼び出しを防ぐガード
+        return
+    mrd.flag_trim_window_open = False  # ガードフラグを先に下げる
+    load_trimdata_from_eeprom_to_board()
     if dpg.does_item_exist("Trim Setting"):
-        dpg.configure_item("Trim Setting", show=False)
+        dpg.delete_item("Trim Setting")
     print("Closed Trim Setting window.")
 
 
@@ -466,12 +550,6 @@ def close_trim_window():
 def sync_power_from_trim(sender, app_data, user_data):
     dpg.set_value("Power", app_data)
     set_servo_power("Power", app_data, None)
-
-
-# Trim Setting側のPythonチェックボックスが変更されたとき, Command側のPythonチェックボックスも同期
-def sync_python_from_trim(sender, app_data, user_data):
-    dpg.set_value("python", app_data)
-    set_python_action("python", app_data, None)
 
 
 # Trim Setting側のEnableチェックボックスが変更されたとき, Command側のEnableチェックボックスも同期
@@ -528,122 +606,49 @@ def apply_trim_input_value(sender, app_data, user_data):
 
     except ValueError:
         dpg.set_value(input_tag, "")            # 数値以外が入力された場合は何もしない
-        print(f"Invalid input for servo {servo_id}. Please enter a number.")
+        print(f"Invalid input for servo {servo_ix}. Please enter a number.")
 
 
 # EEPROMへの保存
-def reset_config_to_default():
-    """Trim設定のサーボ設定(Mt/ID/Rev)をデフォルト値にリセットする. Trim値はそのまま保持."""
-    for i in range(MRD_SERVO_SLOTS):
-        l_key = f"L{i}"
-        r_key = f"R{i}"
-        default_mount = (i <= 10)  # 0-10 はマウントあり, 11-14 はなし
-
-        mrd.servo_mount[l_key] = default_mount
-        mrd.servo_id_values[l_key] = i
-        mrd.servo_direction[l_key] = False
-
-        mrd.servo_mount[r_key] = default_mount
-        mrd.servo_id_values[r_key] = i
-        mrd.servo_direction[r_key] = False
-
-        if dpg.does_item_exist(f"Mount_{l_key}"):
-            dpg.set_value(f"Mount_{l_key}", default_mount)
-        if dpg.does_item_exist(f"ID_{l_key}"):
-            dpg.set_value(f"ID_{l_key}", str(i))
-        if dpg.does_item_exist(f"Direction_{l_key}"):
-            dpg.set_value(f"Direction_{l_key}", False)
-
-        if dpg.does_item_exist(f"Mount_{r_key}"):
-            dpg.set_value(f"Mount_{r_key}", default_mount)
-        if dpg.does_item_exist(f"ID_{r_key}"):
-            dpg.set_value(f"ID_{r_key}", str(i))
-        if dpg.does_item_exist(f"Direction_{r_key}"):
-            dpg.set_value(f"Direction_{r_key}", False)
-
-    print("Servo config (Mt/ID/Rev) reset to defaults. Trim values preserved.")
-
-
 def save_trimdata_to_eeprom():
     # Board側にサーボのトリム値と設定(ID, マウント, 回転方向)をEEPROMに保存させる
 
     trim_msg = "Send Trim data:\n"
 
-    # L系統サーボの処理
-    for i in range(MRD_SERVO_SLOTS):
-        l_servo_ix = f"L{i}"
-        l_settings = 0  # 設定値をゼロから構築
+    for side, orig_idx in [("L", MRD_L_ORIG_IDX), ("R", MRD_R_ORIG_IDX)]:
+        for i in range(MRD_SERVO_SLOTS):
+            servo_ix = f"{side}{i}"
+            settings = 0  # 設定値をゼロから構築
 
-        # マウント情報 (bit0)
-        if mrd.servo_mount[l_servo_ix]:
-            l_settings |= 0x01
+            # マウント情報 (bit0)
+            if mrd.servo_mount[servo_ix]:
+                settings |= 0x01
 
-        # サーボID (bit1-7)
-        servo_id_val = mrd.servo_id_values[l_servo_ix] & 0x7F  # 7ビットに制限
-        l_settings |= (servo_id_val << 1)
+            # サーボID (bit1-7)
+            servo_id_val = mrd.servo_id_values[servo_ix] & 0x7F  # 7ビットに制限
+            settings |= (servo_id_val << 1)
 
-        # 回転方向 (bit8)
-        is_reverse = mrd.servo_direction[l_servo_ix]
-        if not is_reverse:  # 正転の場合はビット8を立てる (1=正転, 0=逆転)
-            l_settings |= 0x100
+            # 回転方向 (bit8)
+            if not mrd.servo_direction[servo_ix]:  # 逆転の場合はビット8を立てる
+                settings |= 0x100
 
-        # int16の範囲内に収まるように調整
-        if l_settings > 32767:
-            l_settings = l_settings - 65536
+            # int16の範囲内に収まるように調整
+            if settings > 32767:
+                settings -= 65536
 
-        # 更新したサーボ設定を格納する
-        mrd.s_meridim_special[MRD_L_ORIG_IDX + i * 2] = l_settings
+            # 更新したサーボ設定を格納する
+            mrd.s_meridim_special[orig_idx + i * 2] = settings
 
-        # トリム値の設定
-        trim_val = 0.0
-        if dpg.does_item_exist(f"Trim_{l_servo_ix}"):
-            trim_val = dpg.get_value(f"Trim_{l_servo_ix}")
-            mrd.s_meridim_special[MRD_L_ORIG_IDX +
-                                  1 + i * 2] = int(trim_val * 100)
+            # トリム値の設定
+            trim_val = 0.0
+            if mrd.flag_trim_window_open and dpg.does_item_exist(f"Trim_{servo_ix}"):
+                trim_val = dpg.get_value(f"Trim_{servo_ix}")
+                mrd.s_meridim_special[orig_idx + 1 + i * 2] = int(trim_val * 100)
 
-        trim_msg += l_servo_ix + " " + f"{trim_val:.2f}"
-
-        if i < MRD_SERVO_SLOTS-1:                       # ラスト以外はカンマ区切り
-            trim_msg += ", "
-
-    trim_msg += "\n"
-
-    # R系統サーボの処理
-    for i in range(15):
-        r_servo_ix = f"R{i}"
-        r_settings = 0  # 設定値をゼロから構築
-
-        # マウント情報 (bit0)
-        if mrd.servo_mount[r_servo_ix]:
-            r_settings |= 0x01
-
-        # サーボID (bit1-7)
-        servo_id_val = mrd.servo_id_values[r_servo_ix] & 0x7F  # 7ビットに制限
-        r_settings |= (servo_id_val << 1)
-
-        # 回転方向 (bit8)
-        is_reverse = mrd.servo_direction[r_servo_ix]
-        if not is_reverse:  # 正転の場合はビット8を立てる (1=正転, 0=逆転)
-            r_settings |= 0x100
-
-        # int16の範囲内に収まるように調整
-        if r_settings > 32767:
-            r_settings = r_settings - 65536
-
-        # 更新したサーボ設定を格納する
-        mrd.s_meridim_special[MRD_R_ORIG_IDX + i * 2] = r_settings
-
-        # トリム値の設定
-        trim_val = 0.0
-        if dpg.does_item_exist(f"Trim_{r_servo_ix}"):
-            trim_val = dpg.get_value(f"Trim_{r_servo_ix}")
-            mrd.s_meridim_special[MRD_R_ORIG_IDX +
-                                  1 + i * 2] = int(trim_val * 100)
-
-        trim_msg += r_servo_ix + " " + f"{trim_val:.2f}"
-
-        if i < MRD_SERVO_SLOTS-1:                       # ラスト以外はカンマ区切り
-            trim_msg += ", "
+            trim_msg += servo_ix + " " + f"{trim_val:.2f}"
+            if i < MRD_SERVO_SLOTS - 1:                 # ラスト以外はカンマ区切り
+                trim_msg += ", "
+        trim_msg += "\n"
 
     print(trim_msg)
 
@@ -654,43 +659,55 @@ def save_trimdata_to_eeprom():
     mrd.flag_special_command_send = 1
 
     print("Command sent: Save trim and settings to EEPROM (10101)")
+    set_trim_step_highlight(2)  # Step3を一時ハイライト(保存中), チェーン完了後にStep2へ戻る
+
+    # SAVE_TRIM送信後、表示スライダーを0にリセット
+    # サーボはLOAD_TRIM(10102)チェーンでTrim Zeroへ移動させる([6-2]参照)
+    for i in range(MRD_SERVO_SLOTS):
+        for side in ("L", "R"):
+            dpg.set_value(f"ID {side}{i}", 0)
+            if mrd.flag_trim_window_open and dpg.does_item_exist(f"Trim_{side}{i}"):
+                dpg.set_value(f"Trim_{side}{i}", 0)
 
 
-# EEPROM全3行をボードから順次取得するコマンドをキューに入れる
-def request_all_eeprom_from_board():
-    for cmd in [MCMD_EEPROM_BOARDTOPC_DATA0, MCMD_EEPROM_BOARDTOPC_DATA1, MCMD_EEPROM_BOARDTOPC_DATA2]:
-        packet = np.zeros(MSG_SIZE, dtype=np.int16)
-        packet[MRD_MASTER] = np.int16(cmd if cmd <= 32767 else cmd - 65536)
-        mrd.special_command_queue.append(packet)
-    print("Queued 3 EEPROM read requests.")
+# EEPROMからBoardへデータを読み込ませる ####
+def load_trimdata_from_eeprom_to_board():
+    # Meridimのマスターコマンド10102を送信するための処理
 
+    # Meridim配列を受信値で初期化
+    # mrd.s_meridim_special = mrd.r_meridim
 
-# EEPROMのtrim値をボードに適用しサーボをHOMEへ移動する (10102)
-# PCは全サーボ位置0を送信し、ESP32がEEPROMのtrim値を内部オフセットとして使用する
-def go_to_eeprom_trim_position():
+    # 特殊コマンドのデータ用のMeridim配列を初期化
     mrd.s_meridim_special = np.zeros(MSG_SIZE, dtype=np.int16)
 
+    # 受信データを特殊コマンド用の配列に転記(現在のサーボ値をそのまま使う)
     for i in range(MSG_SIZE):
         mrd.s_meridim_special[i] = mrd.r_meridim[i]
 
-    # 全サーボ位置を0として送信 (ESP32内部でtrimオフセットを加算して物理位置に変換)
+    # Meridim配列の全サーボ位置に0を入れて送信 ####
     for i in range(MRD_SERVO_SLOTS):
-        mrd.s_meridim_special[MRD_L_ORIG_IDX + 1 + i * 2] = 0
-        mrd.s_meridim_special[MRD_R_ORIG_IDX + 1 + i * 2] = 0
+        left_ix = MRD_L_ORIG_IDX + 1 + i * 2
+        right_ix = MRD_R_ORIG_IDX + 1 + i * 2
 
+        mrd.s_meridim_special[left_ix] = 0
+        mrd.s_meridim_special[right_ix] = 0
+
+    # マスターコマンドを設定
     mrd.s_meridim_special[MRD_MASTER] = MCMD_EEPROM_LOAD_TRIM
+
+    # motion bufferをゼロにして表示ループが0を返すようにする
+    for i in range(MRD_SERVO_SLOTS):
+        left_ix = MRD_L_ORIG_IDX + 1 + i * 2
+        right_ix = MRD_R_ORIG_IDX + 1 + i * 2
+        mrd.s_meridim_motion_f[left_ix] = 0
+        mrd.s_meridim_motion_f[right_ix] = 0
+        mrd.s_meridim_motion_keep_f[left_ix] = 0
+        mrd.s_meridim_motion_keep_f[right_ix] = 0
+
+    # 特殊コマンド送信のフラグを立てる
     mrd.flag_special_command_send = 1
 
-    # PCのスライダーも0にリセット (ESP32側がオフセット管理するためPC側は0が正)
-    for i in range(MRD_SERVO_SLOTS):
-        dpg.set_value(f"ID L{i}", 0)
-        dpg.set_value(f"ID R{i}", 0)
-        if dpg.does_item_exist(f"Trim_L{i}"):
-            dpg.set_value(f"Trim_L{i}", 0)
-        if dpg.does_item_exist(f"Trim_R{i}"):
-            dpg.set_value(f"Trim_R{i}", 0)
-
-    print("Command sent: Go to EEPROM Trim Position (10102)")
+    print("Command sent: Load trim data from EEPROM to board (10102)")
 
 
 # サーボの回転方向フラグを切り替える処理
@@ -713,12 +730,21 @@ def set_servo_angle_from_trim(channel, app_data):
     servo_ix = channel.replace("Trim_", "")
     print(f"スライダー設定値: Trim_{servo_ix} = {app_data}")
 
-    # Axis Monitor側のスライダーを更新
-    axis_slider_tag = f"ID {servo_ix}"
-    dpg.set_value(axis_slider_tag, app_data)
+    # Axis Monitor側のスライダーを物理trim値(正値)で更新
+    dpg.set_value(f"ID {servo_ix}", app_data)
 
-    # 元の関数を呼び出してサーボ角度を設定して実際に動かす
-    set_servo_angle(axis_slider_tag, app_data)
+    # cw方向を考慮してボードへ送る位置を計算(board trim=0の状態でTrim Zeroに到達するため)
+    cw = -1 if mrd.servo_direction.get(servo_ix, False) else 1
+    pos = app_data * cw
+
+    if servo_ix.startswith("L"):
+        index = int(servo_ix[1:])
+        mrd.s_meridim[MRD_L_ORIG_IDX + 1 + index * 2] = int(pos * 100)
+        mrd.s_meridim_motion_f[MRD_L_ORIG_IDX + 1 + index * 2] = pos
+    elif servo_ix.startswith("R"):
+        index = int(servo_ix[1:])
+        mrd.s_meridim[MRD_R_ORIG_IDX + 1 + index * 2] = int(pos * 100)
+        mrd.s_meridim_motion_f[MRD_R_ORIG_IDX + 1 + index * 2] = pos
 
 
 def process_eeprom_data():
@@ -732,65 +758,50 @@ def process_eeprom_data():
 
     # 各サーボの設定を処理
     for i in range(MRD_SERVO_SLOTS):
-        # L系統サーボの処理
-        l_settings = mrd.r_meridim[MRD_L_ORIG_IDX + i * 2]
-        l_trim_val = mrd.r_meridim[MRD_L_ORIG_IDX +
-                                   1 + i * 2] * 0.01  # トリム値(100で割って実際の角度に)
+        for side, orig_idx in [("L", MRD_L_ORIG_IDX), ("R", MRD_R_ORIG_IDX)]:
+            servo_key = f"{side}{i}"
+            settings  = mrd.r_meridim[orig_idx + i * 2]
+            trim_val  = mrd.r_meridim[orig_idx + 1 + i * 2] * 0.01  # トリム値(100で割って実際の角度に)
 
-        # マウント情報(bit0)を抽出
-        l_mount = (l_settings & 0x01) > 0  # 1ならTrue, 0ならFalse
+            # マウント情報(bit0)、サーボID(bit1-7)、回転方向(bit8)を抽出
+            mount      = (settings & 0x01) > 0
+            servo_id   = (settings >> 1) & 0x7F          # 7ビット分のマスク
+            is_reverse = ((settings >> 8) & 0x01) == 0   # 0=逆転, 1=正転
 
-        # サーボID(bit1-7)を抽出
-        l_servo_ix = (l_settings >> 1) & 0x7F  # 7ビット分のマスク
+            # フラグと値を更新
+            mrd.servo_mount[servo_key]      = mount
+            mrd.servo_id_values[servo_key]  = servo_id
+            mrd.servo_direction[servo_key]  = is_reverse
 
-        # 回転方向(bit8)を抽出
-        l_direction = (l_settings >> 8) & 0x01  # 0=逆転, 1=正転
-        l_is_reverse = l_direction == 0  # チェックボックスの状態(Trueが逆転)
+            print(f"{servo_key} - ID: {servo_id}, Mt: {'1' if mount else '0'}, Dir: {'Rev ' if is_reverse else 'Norm'}, Trim: {trim_val}")
 
-        # EEPROMからLoadしたサーボの初期トリム値キープ
-        mrd.servo_l_trim_values_loaded[i] = l_trim_val
+            # Trim Settingウィンドウが開いている場合, UI要素を更新
+            if mrd.flag_trim_window_open:
+                if dpg.does_item_exist(f"Direction_{servo_key}"):
+                    dpg.set_value(f"Direction_{servo_key}", is_reverse)
+                if dpg.does_item_exist(f"Mount_{servo_key}"):
+                    dpg.set_value(f"Mount_{servo_key}", mount)
+                if dpg.does_item_exist(f"ID_{servo_key}"):
+                    dpg.set_value(f"ID_{servo_key}", str(servo_id))
+                if dpg.does_item_exist(f"Trim_{servo_key}"):
+                    dpg.enable_item(f"Trim_{servo_key}")  # disabled状態でもset_valueが反映されるよう先に有効化
+                    dpg.set_value(f"Trim_{servo_key}", trim_val)
 
-        # サーボIDを文字列で作成
-        l_servo_key = f"L{i}"
-
-        # フラグと値を更新
-        mrd.servo_mount[l_servo_key] = l_mount
-        mrd.servo_id_values[l_servo_key] = l_servo_ix
-        mrd.servo_direction[l_servo_key] = l_is_reverse
-
-        print(f"{l_servo_key} - ID: {l_servo_ix}, Mt: {'1' if l_mount else '0'}, Dir: {'Rev ' if l_is_reverse else 'Norm'}, Trim: {l_trim_val}")
-
-        # R系統サーボの処理
-        r_settings = mrd.r_meridim[MRD_R_ORIG_IDX + i * 2]
-        r_trim_val = mrd.r_meridim[MRD_R_ORIG_IDX + 1 + i * 2] * 0.01
-
-        # マウント情報(bit0)を抽出
-        r_mount = (r_settings & 0x01) > 0
-
-        # サーボID(bit1-7)を抽出
-        r_servo_ix = (r_settings >> 1) & 0x7F
-
-        # 回転方向(bit8)を抽出
-        r_direction = (r_settings >> 8) & 0x01
-        r_is_reverse = r_direction == 0
-
-        # EEPROMからLoadしたサーボの初期トリム値キープ
-        mrd.servo_r_trim_values_loaded[i] = r_trim_val
-
-        # サーボIDを文字列で作成
-        r_servo_key = f"R{i}"
-
-        # フラグと値を更新
-        mrd.servo_mount[r_servo_key] = r_mount
-        mrd.servo_id_values[r_servo_key] = r_servo_ix
-        mrd.servo_direction[r_servo_key] = r_is_reverse
-
-        print(f"{r_servo_key} - ID: {r_servo_ix}, Mt: {'1' if r_mount else '0'}, Dir: {'Rev ' if r_is_reverse else 'Norm'}, Trim: {r_trim_val}")
+    # 読み込んだトリム値をサーボ位置にも反映する
+    if mrd.flag_servo_power:  # サーボパワーがオンの場合のみ適用
+        for i in range(MRD_SERVO_SLOTS):
+            for side, orig_idx in [("L", MRD_L_ORIG_IDX), ("R", MRD_R_ORIG_IDX)]:
+                servo_key = f"{side}{i}"
+                cw        = -1 if mrd.servo_direction.get(servo_key, False) else 1
+                trim_val  = mrd.r_meridim[orig_idx + 1 + i * 2] * 0.01
+                pos       = trim_val * cw
+                mrd.s_meridim[orig_idx + 1 + i * 2]        = int(pos * 100)
+                mrd.s_meridim_motion_f[orig_idx + 1 + i * 2] = pos
+                dpg.set_value(f"ID {side}{i}", trim_val)   # 表示は物理trim値(正値)
 
     mrd.k_meridim_eeprom_last = mrd.r_meridim  # 受信したEEPROMの値を出力用にキープ
-    mrd.flag_eeprom_to_ui = True  # メインスレッドにUI更新を委譲
 
-    print("EEPROM data ready. UI will be updated in main thread.")
+    print("EEPROM data loaded to Trim Settings window and applied to servos.")
 
 
 # サーボのマウント有無を切り替える
@@ -825,9 +836,57 @@ def set_servo_id(sender, app_data, user_data):
         print(f"Invalid input. Servo ID must be a number.")
 
 
-# [Prepare Trim] ボタンの処理
+# Start Trim Settingボタンの処理
+def set_trim_step_highlight(step):
+    """ステップインジケーターの枠を更新する (0=Step1, 1=Step2, 2=Step3)"""
+    on_color = [100, 180, 255, 220]
+    on_fill  = [0, 0, 0, 0]
+    off      = [0, 0, 0, 0]
+    for i in range(3):
+        tag = f"TrimStepHL{i}"
+        if dpg.does_item_exist(tag):
+            dpg.configure_item(tag, color=on_color if i == step else off,
+                               fill=on_fill if i == step else off)
+    # Exit highlight: step==2(Save to EEPROM後)に追加表示
+    if dpg.does_item_exist("TrimStepHL3"):
+        dpg.configure_item("TrimStepHL3",
+                           color=on_color if step == 2 else off,
+                           fill=on_fill if step == 2 else off)
+
+
+def set_trim_area_enabled(enabled):
+    # オーバーレイの表示切り替え(disabled時に前面に表示してウィジェットを塗りつぶす)
+    for _tag in ("TrimCoverOverlay", "TrimCoverToolbarMid", "TrimCoverBottomRow"):
+        if dpg.does_item_exist(_tag):
+            dpg.configure_item(_tag, show=not enabled)
+
+    for i in range(MRD_SERVO_SLOTS):
+        for side in ["R", "L"]:
+            for tag in [f"Mount_{side}{i}", f"ID_{side}{i}", f"Direction_{side}{i}",
+                        f"Trim_{side}{i}",
+                        f"TrimMinus_{side}{i}", f"TrimPlus_{side}{i}",
+                        f"Input_Trim_{side}{i}", f"Enter_Trim_{side}{i}"]:
+                if dpg.does_item_exist(tag):
+                    dpg.enable_item(tag) if enabled else dpg.disable_item(tag)
+
+    if dpg.does_item_exist(STEP_TAG):
+        dpg.enable_item(STEP_TAG) if enabled else dpg.disable_item(STEP_TAG)
+
+    set_trim_step_highlight(1 if enabled else 0)
+
+
 def start_trim_setting():
     # トリム設定モードを開始するために, マスターコマンドとしてMCMD_START_TRIM_SETTINGを送信する
+    set_trim_area_enabled(True)
+
+    # 前回取得済みのEEPROMデータがあれば即座にスライダーへ反映する(ボード応答を待たずに表示)
+    if int(mrd.k_meridim_eeprom_last[MRD_MASTER]) == MCMD_EEPROM_BOARDTOPC_DATA1:
+        data = mrd.k_meridim_eeprom_last
+        for i in range(MRD_SERVO_SLOTS):
+            for side, orig_idx in [("L", MRD_L_ORIG_IDX), ("R", MRD_R_ORIG_IDX)]:
+                servo_key = f"{side}{i}"
+                if dpg.does_item_exist(f"Trim_{servo_key}"):
+                    dpg.set_value(f"Trim_{servo_key}", data[orig_idx + 1 + i * 2] * 0.01)
 
     # 特殊コマンドのデータ用のMeridim配列を初期化
     mrd.s_meridim_special = np.zeros(MSG_SIZE, dtype=np.int16)
@@ -842,7 +901,7 @@ def start_trim_setting():
     # 特殊コマンド送信のフラグを立てる
     mrd.flag_special_command_send = 1
 
-    print("Command sent: Prepare Trim (10100)")
+    print("Command sent: Start Trim Setting Mode (10100)")
 
 # 整数値から特定の位置と長さでビットを抽出する関数
 
@@ -866,259 +925,113 @@ def mrd_slice_bits(value, pos, length):
 # Trim Setting で設定したパラメータをファイルに出力する
 
 
-def export_settings_to_file():
-    # 最後に受信もしくは送信したEEPROMの内容を,
-    # MeridianLiteServoTrimCode.hに保存する(Meridianのボード側のコードにコピペできる書式)
+def _generate_export_content(for_display=False):
+    """Export用のヘッダーファイル文字列を生成して返す。
+    for_display=True の場合はヘッダーガードを省略する。"""
+    _L = ["Head Yaw", "L Shoulder Pitch", "L Shoulder Roll", "L Elbow Yaw", "L Elbow Pitch",
+          "L Hip Yaw", "L Hip Roll", "L Hip Pitch", "L Knee Pitch", "L Ankle Pitch", "L Ankle Roll"]
+    _R = ["Waist Yaw", "R Shoulder Pitch", "R Shoulder Roll", "R Elbow Yaw", "R Elbow Pitch",
+          "R Hip Yaw", "R Hip Roll", "R Hip Pitch", "R Knee Pitch", "R Ankle Pitch", "R Ankle Roll"]
 
-    # タイムスタンプを取得
+    def _cmt(i, names):
+        name = names[i] if i < len(names) else f"Extra servo {i}"
+        return f" // [{i:02d}] {name}"
+
+    def _block(arr_name, type_str, comment, names, value_fn):
+        max_macro = "IXL_MAX" if arr_name.startswith("IXL") else "IXR_MAX"
+        out = f"// {comment}\n{type_str} {arr_name}[{max_macro}] = {{\n"
+        for i in range(MRD_SERVO_SLOTS):
+            out += f"{value_fn(i)},{_cmt(i, names)}\n"
+        return out + "};\n\n"
+
+    data = mrd.k_meridim_eeprom_last
     timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
-
-    # パスの処理
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    file_path = os.path.join(script_dir, "MeridianLiteServoTrimCode.h")
-
-    # Prepare the content
     content = f"// Generated by Meridian_Console on {timestamp}\n\n"
 
-    # Constants
-    content += "#ifndef MERIDIAN_LITE_SERVO_TRIM_CODE_H\n"
-    content += "#define MERIDIAN_LITE_SERVO_TRIM_CODE_H\n\n"
-    content += "#define IXL_MAX 15\n"
-    content += "#define IXR_MAX 15\n\n"
+    if not for_display:
+        content += "#ifndef MERIDIAN_LITE_SERVO_TRIM_CODE_H\n"
+        content += "#define MERIDIAN_LITE_SERVO_TRIM_CODE_H\n\n"
+        content += "#define IXL_MAX 15\n"
+        content += "#define IXR_MAX 15\n\n"
 
-    # L系統のサーボID配列
-    content += "// L系統のコード上のサーボIndexに対し, 実際に呼び出すハードウェアのID番号\n"
-    content += "int IXL_ID[IXL_MAX] = {\n"
-    for i in range(MRD_SERVO_SLOTS):
-        servo_key = f"L{i}"
-        servo_id = mrd_slice_bits(
-            mrd.k_meridim_eeprom_last[MRD_L_ORIG_IDX + i * 2], 1, 7)
-        comment = ""
-        if i == 0:
-            comment = " // [00]頭ヨー"
-        elif i == 1:
-            comment = " // [01]左肩ピッチ"
-        elif i == 2:
-            comment = " // [02]左肩ロール"
-        elif i == 3:
-            comment = " // [03]左肘ヨー"
-        elif i == 4:
-            comment = " // [04]左肘ピッチ"
-        elif i == 5:
-            comment = " // [05]左股ヨー"
-        elif i == 6:
-            comment = " // [06]左股ロール"
-        elif i == 7:
-            comment = " // [07]左股ピッチ"
-        elif i == 8:
-            comment = " // [08]左膝ピッチ"
-        elif i == 9:
-            comment = " // [09]左足首ピッチ"
-        elif i == 10:
-            comment = " // [10]左足首ロール"
-        else:
-            comment = f" // [{i:02d}]追加サーボ用"
+    content += _block("IXL_ID",   "int",   "L-side servo hardware ID for each servo index",
+                      _L, lambda i: mrd_slice_bits(data[MRD_L_ORIG_IDX + i * 2], 1, 7))
+    content += _block("IXR_ID",   "int",   "R-side servo hardware ID for each servo index",
+                      _R, lambda i: mrd_slice_bits(data[MRD_R_ORIG_IDX + i * 2], 1, 7))
+    content += _block("IXL_CW",   "int",   "L-side servo rotation direction (1:normal, -1:reverse)",
+                      _L, lambda i: 1 if mrd_slice_bits(data[MRD_L_ORIG_IDX + i * 2], 8, 1) else -1)
+    content += _block("IXR_CW",   "int",   "R-side servo rotation direction (1:normal, -1:reverse)",
+                      _R, lambda i: 1 if mrd_slice_bits(data[MRD_R_ORIG_IDX + i * 2], 8, 1) else -1)
+    content += _block("IXL_TRIM", "float", "L-side servo trim values (degree)",
+                      _L, lambda i: data[MRD_L_ORIG_IDX + 1 + i * 2] * 0.01)
+    content += _block("IXR_TRIM", "float", "R-side servo trim values (degree)",
+                      _R, lambda i: data[MRD_R_ORIG_IDX + 1 + i * 2] * 0.01)
 
-        content += f"{servo_id},{comment}\n"
-    content += "};\n\n"
+    if not for_display:
+        content += "#endif // MERIDIAN_LITE_SERVO_TRIM_CODE_H\n"
 
-    # R系統のサーボID配列
-    content += "// R系統のコード上のサーボIndexに対し, 実際に呼び出すハードウェアのID番号\n"
-    content += "int IXR_ID[IXR_MAX] = {\n"
-    for i in range(MRD_SERVO_SLOTS):
-        servo_key = f"R{i}"
-        servo_id = mrd_slice_bits(
-            mrd.k_meridim_eeprom_last[MRD_R_ORIG_IDX + i * 2], 1, 7)
-        comment = ""
-        if i == 0:
-            comment = " // [00]腰ヨー"
-        elif i == 1:
-            comment = " // [01]右肩ピッチ"
-        elif i == 2:
-            comment = " // [02]右肩ロール"
-        elif i == 3:
-            comment = " // [03]右肘ヨー"
-        elif i == 4:
-            comment = " // [04]右肘ピッチ"
-        elif i == 5:
-            comment = " // [05]右股ヨー"
-        elif i == 6:
-            comment = " // [06]右股ロール"
-        elif i == 7:
-            comment = " // [07]右股ピッチ"
-        elif i == 8:
-            comment = " // [08]右膝ピッチ"
-        elif i == 9:
-            comment = " // [09]右足首ピッチ"
-        elif i == 10:
-            comment = " // [10]右足首ロール"
-        else:
-            comment = f" // [{i:02d}]追加サーボ用"
+    return content
 
-        content += f"{servo_id},{comment}\n"
-    content += "};\n\n"
 
-    # L系統のサーボ回転方向補正
-    content += "// L系統のサーボ回転方向補正(1:変更なし, -1:逆転)\n"
-    content += "int IXL_CW[IXL_MAX] = {\n"
-    for i in range(MRD_SERVO_SLOTS):
-        servo_key = f"L{i}"
-        # サーボ方向が逆転(True)なら-1, そうでなければ1
-        direction = 1 if mrd_slice_bits(
-            mrd.k_meridim_eeprom_last[MRD_L_ORIG_IDX + i * 2], 8, 1) else -1
-        comment = ""
-        if i == 0:
-            comment = " // [00]頭ヨー"
-        elif i == 1:
-            comment = " // [01]左肩ピッチ"
-        elif i == 2:
-            comment = " // [02]左肩ロール"
-        elif i == 3:
-            comment = " // [03]左肘ヨー"
-        elif i == 4:
-            comment = " // [04]左肘ピッチ"
-        elif i == 5:
-            comment = " // [05]左股ヨー"
-        elif i == 6:
-            comment = " // [06]左股ロール"
-        elif i == 7:
-            comment = " // [07]左股ピッチ"
-        elif i == 8:
-            comment = " // [08]左膝ピッチ"
-        elif i == 9:
-            comment = " // [09]左足首ピッチ"
-        elif i == 10:
-            comment = " // [10]左足首ロール"
-        else:
-            comment = f" // [{i:02d}]追加サーボ用"
-
-        content += f"{direction},{comment}\n"
-    content += "};\n\n"
-
-    # R系統のサーボ回転方向補正
-    content += "// R系統のサーボ回転方向補正(1:変更なし, -1:逆転)\n"
-    content += "int IXR_CW[IXR_MAX] = {\n"
-    content += " // R系統の正転逆転\n"
-    for i in range(MRD_SERVO_SLOTS):
-        servo_key = f"R{i}"
-        # サーボ方向が逆転(True)なら-1, そうでなければ1
-        direction = 1 if mrd_slice_bits(
-            mrd.k_meridim_eeprom_last[MRD_R_ORIG_IDX + i * 2], 8, 1) else -1
-        comment = ""
-        if i == 0:
-            comment = " // [00]腰ヨー"
-        elif i == 1:
-            comment = " // [01]右肩ピッチ"
-        elif i == 2:
-            comment = " // [02]右肩ロール"
-        elif i == 3:
-            comment = " // [03]右肘ヨー"
-        elif i == 4:
-            comment = " // [04]右肘ピッチ"
-        elif i == 5:
-            comment = " // [05]右股ヨー"
-        elif i == 6:
-            comment = " // [06]右股ロール"
-        elif i == 7:
-            comment = " // [07]右股ピッチ"
-        elif i == 8:
-            comment = " // [08]右膝ピッチ"
-        elif i == 9:
-            comment = " // [09]右足首ピッチ"
-        elif i == 10:
-            comment = " // [10]右足首ロール"
-        else:
-            comment = f" // [{i:02d}]追加サーボ用"
-
-        content += f"{direction},{comment}\n"
-    content += "};\n\n"
-
-    # L系統のトリム値
-    content += "// L系統のトリム値(degree)\n"
-    content += "float IXL_TRIM[IXL_MAX] = {\n"
-    for i in range(MRD_SERVO_SLOTS):
-        trim_tag = f"Trim_L{i}"
-        # トリム値を取得(UIウィンドウが開いていない場合は0に)
-        trim_value = mrd.k_meridim_eeprom_last[MRD_L_ORIG_IDX + 1 + i * 2]*0.01
-
-        comment = ""
-        if i == 0:
-            comment = " // [00]頭ヨー"
-        elif i == 1:
-            comment = " // [01]左肩ピッチ"
-        elif i == 2:
-            comment = " // [02]左肩ロール"
-        elif i == 3:
-            comment = " // [03]左肘ヨー"
-        elif i == 4:
-            comment = " // [04]左肘ピッチ"
-        elif i == 5:
-            comment = " // [05]左股ヨー"
-        elif i == 6:
-            comment = " // [06]左股ロール"
-        elif i == 7:
-            comment = " // [07]左股ピッチ"
-        elif i == 8:
-            comment = " // [08]左膝ピッチ"
-        elif i == 9:
-            comment = " // [09]左足首ピッチ"
-        elif i == 10:
-            comment = " // [10]左足首ロール"
-        else:
-            comment = f" // [{i:02d}]追加サーボ用"
-
-        content += f"{trim_value},{comment}\n"
-    content += "};\n\n"
-
-    # R系統のトリム値
-    content += "// R系統のトリム値(degree)\n"
-    content += "float IXR_TRIM[IXR_MAX] = {\n"
-    for i in range(MRD_SERVO_SLOTS):
-        trim_tag = f"Trim_R{i}"
-        # トリム値を取得(UIウィンドウが開いていない場合は0に)
-        trim_value = trim_value = mrd.k_meridim_eeprom_last[MRD_R_ORIG_IDX + 1 + i * 2]*0.01
-
-        comment = ""
-        if i == 0:
-            comment = " // [00]腰ヨー"
-        elif i == 1:
-            comment = " // [01]右肩ピッチ"
-        elif i == 2:
-            comment = " // [02]右肩ロール"
-        elif i == 3:
-            comment = " // [03]右肘ヨー"
-        elif i == 4:
-            comment = " // [04]右肘ピッチ"
-        elif i == 5:
-            comment = " // [05]右股ヨー"
-        elif i == 6:
-            comment = " // [06]右股ロール"
-        elif i == 7:
-            comment = " // [07]右股ピッチ"
-        elif i == 8:
-            comment = " // [08]右膝ピッチ"
-        elif i == 9:
-            comment = " // [09]右足首ピッチ"
-        elif i == 10:
-            comment = " // [10]右足首ロール"
-        else:
-            comment = f" // [{i:02d}]追加サーボ用"
-
-        content += f"{trim_value},{comment}\n"
-    content += "};\n\n"
-
-    # End header guard
-    content += "#endif // MERIDIAN_LITE_SERVO_TRIM_CODE_H\n"
-
-    # Write to file
+def export_settings_to_file():
+    """EEPROMの内容を MeridianLiteServoTrimCode.h に保存する。"""
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    file_path = os.path.join(script_dir, "MeridianLiteServoTrimCode.h")
     try:
         with open(file_path, "w") as f:
-            f.write(content)
+            f.write(_generate_export_content())
         print(f"Settings exported to: {file_path}")
+        _show_export_modal(file_path, success=True)
         return True
     except Exception as e:
         print(f"Error exporting settings: {str(e)}")
+        _show_export_modal(str(e), success=False)
         return False
+
+
+def show_setting_data_modal():
+    """生成されるExportコンテンツをモーダルで表示し、クリップボードへコピーできるようにする。"""
+    _TAG = "SettingDataModal"
+    if dpg.does_item_exist(_TAG):
+        dpg.delete_item(_TAG)
+    content = _generate_export_content(for_display=True)
+    vw = dpg.get_viewport_width()
+    vh = dpg.get_viewport_height()
+    w, h = 620, 520
+    with dpg.window(label="Setting Data", modal=True, show=True, tag=_TAG,
+                    width=w, height=h, no_resize=True,
+                    pos=[vw // 2 - w // 2, vh // 2 - h // 2]):
+        dpg.add_input_text(tag=f"{_TAG}_text", default_value=content,
+                           multiline=True, readonly=True,
+                           width=w - 24, height=h - 80)
+        dpg.add_spacer(height=6)
+        with dpg.group(horizontal=True):
+            dpg.add_button(label="Copy All", width=100,
+                           callback=lambda: dpg.set_clipboard_text(
+                               dpg.get_value(f"{_TAG}_text")))
+            dpg.add_spacer(width=10)
+            dpg.add_button(label="Close", width=80,
+                           callback=lambda: dpg.delete_item(_TAG))
+
+
+def _show_export_modal(message, success):
+    _TAG = "ExportResultModal"
+    if dpg.does_item_exist(_TAG):
+        dpg.delete_item(_TAG)
+    vw = dpg.get_viewport_width()
+    vh = dpg.get_viewport_height()
+    w, h = 540, 110
+    with dpg.window(label="Export Settings", modal=True, show=True, tag=_TAG,
+                    width=w, height=h, no_resize=True,
+                    pos=[vw // 2 - w // 2, vh // 2 - h // 2]):
+        if success:
+            dpg.add_text("Exported successfully:")
+            dpg.add_text(message, wrap=w - 24)
+        else:
+            dpg.add_text(f"Export failed: {message}", wrap=w - 24)
+        dpg.add_spacer(height=6)
+        dpg.add_button(label="Close", width=80,
+                       callback=lambda: dpg.delete_item(_TAG))
 
 
 STEP_TAG = "TrimStep"        # ステップ入力フィールド用タグ
@@ -1159,58 +1072,66 @@ def create_trim_window():
                     pos=[10, 10], on_close=close_trim_window):
 
         # --- 上部コントロールエリア -------------------------------------------------
-        # 行1: [Prepare Trim] □Power □Python □Enable [Save to EEPROM] [Go to Hard Origin]
-        # 行2: [Read EEPROM] [Go to EEPROM Trim Position] [Stop Trim Setting]  [Export Settings]
-        power_state = dpg.get_value("Power")
-        python_state = dpg.get_value("python")
-        enable_state = dpg.get_value("Enable")
+        # Trim窓オープン時: Python を強制OFF
+        dpg.set_value("python", False)
+        set_python_action("python", False, None)
 
-        # 行1
-        dpg.add_button(label="Prepare Trim",
-                       callback=start_trim_setting, pos=[15, 35], width=120)
+        # Enable ON 前に受信サーボ値をモーションバッファへ複写し, 位置変化を防ぐ
+        for i in range(MRD_SERVO_SLOTS):
+            l_ix = MRD_L_ORIG_IDX + 1 + i * 2
+            r_ix = MRD_R_ORIG_IDX + 1 + i * 2
+            mrd.s_meridim_motion_f[l_ix] = mrd.r_meridim[l_ix] * 0.01
+            mrd.s_meridim_motion_f[r_ix] = mrd.r_meridim[r_ix] * 0.01
+            mrd.s_meridim_motion_keep_f[l_ix] = mrd.s_meridim_motion_f[l_ix]
+            mrd.s_meridim_motion_keep_f[r_ix] = mrd.s_meridim_motion_f[r_ix]
 
-        dpg.add_checkbox(label="Power",  tag="Power_Trim", default_value=power_state,
-                         pos=[viewport_width//2-250, 35], callback=sync_power_from_trim)
-        dpg.add_checkbox(label="Python", tag="Python_Trim", default_value=python_state,
-                         pos=[viewport_width//2-185, 35], callback=sync_python_from_trim)
-        dpg.add_checkbox(label="Enable", tag="Enable_Trim", default_value=enable_state,
-                         pos=[viewport_width//2-110, 35], callback=sync_enable_from_trim)
+        # Power/Enable を強制ON
+        dpg.set_value("Power", True)
+        set_servo_power("Power", True, None)
+        dpg.set_value("Enable", True)
+        set_enable("Enable", True, None)
 
+        # --- Step1 / Step2 / Step3 / Exit (均等4分割) ---
+        _s = viewport_width // 4  # 1セクション幅
+        dpg.add_text("Step1: ", pos=[15, 35])
+        dpg.add_button(label="Enter Trim Mode",
+                       callback=start_trim_setting, pos=[60, 35], width=140)
+
+        dpg.add_text("Step2: Adjust Trim to Zero", pos=[_s + 20, 35])
+
+        dpg.add_text("Step3: ", pos=[_s * 2 + 40, 35])
         dpg.add_button(label="Save to EEPROM", callback=save_trimdata_to_eeprom,
-                       pos=[viewport_width//2-10, 35], width=125)
-        dpg.add_button(label="Go to Hard Origin", callback=set_trim_home,
-                       pos=[viewport_width//2+125, 35], width=145)
+                       pos=[_s * 2 + 88, 35], width=125)
 
-        # 行2
-        dpg.add_button(label="Read EEPROM", callback=request_all_eeprom_from_board,
-                       pos=[15, 62], width=115)
-        dpg.add_button(label="Reset Config", callback=reset_config_to_default,
-                       pos=[140, 62], width=105)
-        dpg.add_button(label="Go to EEPROM Trim Position", callback=go_to_eeprom_trim_position,
-                       pos=[255, 62], width=200)
-        dpg.add_button(label="Stop Trim Setting",
-                       callback=close_trim_window, pos=[465, 62], width=140)
-        dpg.add_button(label="Export Settings", callback=export_settings_to_file,
-                       pos=[viewport_width//2+250, 62], width=125)
+        dpg.add_button(label="Exit", callback=close_trim_window,
+                       pos=[viewport_width - 140, 35], width=100)
 
-        # --- ステップ値入力フィールド(左下) ---------------------------------------
-        dpg.add_input_float(label="delta", tag=STEP_TAG, default_value=1.0, width=90,
-                            pos=[viewport_height-20, viewport_height-80], min_value=0.0, min_clamped=True, format="%.2f")
+        dpg.add_checkbox(label="Power",  tag="Power_Trim", default_value=True,
+                         pos=[15, viewport_height-52], callback=sync_power_from_trim)
+        dpg.add_checkbox(label="Enable", tag="Enable_Trim", default_value=True,
+                         pos=[80, viewport_height-52], callback=sync_enable_from_trim)
+
+        # --- ステップ値入力フィールド: right edge aligns with L-column Enter button right edge ---
+        _delta_right = trim_window_right_block + 197  # trim_window_right_block+155(Enter pos) + 42(width)
+        dpg.add_text("delta", pos=[_delta_right - 133, viewport_height - 90])
+        dpg.add_input_float(tag=STEP_TAG, label="##delta_label", default_value=1.0, width=90,
+                            pos=[_delta_right - 90, viewport_height - 92],
+                            min_value=0.0, min_clamped=True, format="%.2f")
 
         # --- ヘッダー(右サーボ列) -------------------------------------------------
-        dpg.add_text("Idx", pos=[trim_window_left_block-165, 95])
-        dpg.add_text("Mt",  pos=[trim_window_left_block-132, 95])
-        dpg.add_text("ID",  pos=[trim_window_left_block-104, 95])
-        dpg.add_text("Rev", pos=[trim_window_left_block-77,  95])
-        dpg.add_text("Right Side Servo Values", pos=[
-                     trim_window_left_block-30, 90])
+        dpg.add_text("Idx", tag="TrimH_R_Idx", pos=[trim_window_left_block-165, 83])
+        dpg.add_text("Mt",  tag="TrimH_R_Mt",  pos=[trim_window_left_block-132, 83])
+        dpg.add_text("ID",  tag="TrimH_R_ID",  pos=[trim_window_left_block-104, 83])
+        dpg.add_text("Rev", tag="TrimH_R_Rev", pos=[trim_window_left_block-77,  83])
+        dpg.add_text("Right Side Servo Values", tag="TrimH_R_Title", pos=[
+                     trim_window_left_block-30, 83])
 
         # --- 右サーボ列 (R0-R14) ----------------------------------------------------
         for i in range(MRD_SERVO_SLOTS):
-            base_y = 120 + i * 25
+            base_y = 108 + i * 25
             slider_tag = f"Trim_R{i}"
 
-            dpg.add_text(f"R{i}", pos=[trim_window_left_block-162, base_y])
+            dpg.add_text(f"R{i}", tag=f"TrimLabel_R{i}", pos=[trim_window_left_block-162, base_y])
             dpg.add_checkbox(tag=f"Mount_R{i}", default_value=mrd.servo_mount[f"R{i}"],
                              callback=toggle_servo_mount, user_data=f"R{i}", pos=[trim_window_left_block-135, base_y])
             dpg.add_input_text(tag=f"ID_R{i}", default_value=str(mrd.servo_id_values[f"R{i}"]),
@@ -1223,9 +1144,9 @@ def create_trim_window():
                                  callback=set_servo_angle_from_trim, pos=[trim_window_left_block-50, base_y])
 
             # -/+ ボタン
-            dpg.add_button(label="-", width=18, pos=[
+            dpg.add_button(label="-", tag=f"TrimMinus_R{i}", width=18, pos=[
                            trim_window_left_block+55, base_y], callback=step_trim, user_data=(slider_tag, -1))
-            dpg.add_button(label="+", width=18, pos=[
+            dpg.add_button(label="+", tag=f"TrimPlus_R{i}", width=18, pos=[
                            trim_window_left_block+77, base_y], callback=step_trim, user_data=(slider_tag, +1))
 
             # インプットフィールド
@@ -1237,19 +1158,19 @@ def create_trim_window():
                            width=42, pos=[trim_window_left_block+155, base_y])
 
         # --- ヘッダー(左サーボ列) -------------------------------------------------
-        dpg.add_text("Idx", pos=[trim_window_right_block-165, 95])
-        dpg.add_text("Mt",  pos=[trim_window_right_block-132, 95])
-        dpg.add_text("ID",  pos=[trim_window_right_block-104, 95])
-        dpg.add_text("Rev", pos=[trim_window_right_block-77,  95])
-        dpg.add_text("Left Side Servo Values", pos=[
-                     trim_window_right_block-30, 95])
+        dpg.add_text("Idx", tag="TrimH_L_Idx", pos=[trim_window_right_block-165, 83])
+        dpg.add_text("Mt",  tag="TrimH_L_Mt",  pos=[trim_window_right_block-132, 83])
+        dpg.add_text("ID",  tag="TrimH_L_ID",  pos=[trim_window_right_block-104, 83])
+        dpg.add_text("Rev", tag="TrimH_L_Rev", pos=[trim_window_right_block-77,  83])
+        dpg.add_text("Left Side Servo Values", tag="TrimH_L_Title", pos=[
+                     trim_window_right_block-30, 83])
 
         # --- 左サーボ列 (L0-L14) ----------------------------------------------------
         for i in range(MRD_SERVO_SLOTS):
-            base_y = 120 + i * 25
+            base_y = 108 + i * 25
             slider_tag = f"Trim_L{i}"
 
-            dpg.add_text(f"L{i}", pos=[trim_window_right_block-162, base_y])
+            dpg.add_text(f"L{i}", tag=f"TrimLabel_L{i}", pos=[trim_window_right_block-162, base_y])
             dpg.add_checkbox(tag=f"Mount_L{i}", default_value=mrd.servo_mount[f"L{i}"],
                              callback=toggle_servo_mount, user_data=f"L{i}", pos=[trim_window_right_block-135, base_y])
             dpg.add_input_text(tag=f"ID_L{i}", default_value=str(mrd.servo_id_values[f"L{i}"]),
@@ -1262,9 +1183,9 @@ def create_trim_window():
                                  callback=set_servo_angle_from_trim, pos=[trim_window_right_block-50, base_y])
 
             # -/+ ボタン
-            dpg.add_button(label="-", width=18, pos=[
+            dpg.add_button(label="-", tag=f"TrimMinus_L{i}", width=18, pos=[
                            trim_window_right_block+55, base_y], callback=step_trim, user_data=(slider_tag, -1))
-            dpg.add_button(label="+", width=18, pos=[
+            dpg.add_button(label="+", tag=f"TrimPlus_L{i}", width=18, pos=[
                            trim_window_right_block+77, base_y], callback=step_trim, user_data=(slider_tag, +1))
 
             # インプットフィールド
@@ -1275,13 +1196,64 @@ def create_trim_window():
             dpg.add_button(label="Enter", tag=f"Enter_Trim_L{i}", callback=apply_trim_input_value, user_data=f"L{i}",
                            width=42, pos=[trim_window_right_block+155, base_y])
 
-        # --- 閉じるボタン -----------------------------------------------------------
-        dpg.add_button(label="Close", callback=close_trim_window, width=100, pos=[
-                       viewport_width//2-50, viewport_height-80])
+        # --- 下部ボタン行 (Power / Enable / Raw Zero / Trim Zero / Export Settings / Show Setting Data) ---
+        # right-anchored, 20px margin, 8px gaps: Show(140) | Export(125) | TrimZero(80) | RawZero(70)
+        dpg.add_button(label="Raw Zero", callback=send_raw_zero_temp,
+                       pos=[viewport_width-479, viewport_height-52], width=70)
+        dpg.add_button(label="Trim Zero", callback=send_trim_zero_restore,
+                       pos=[viewport_width-401, viewport_height-52], width=80)
+        dpg.add_button(label="Export Settings", callback=export_settings_to_file,
+                       pos=[viewport_width-313, viewport_height-52], width=125)
+        dpg.add_button(label="Show Setting Data", callback=show_setting_data_modal,
+                       pos=[viewport_width-180, viewport_height-52], width=140)
 
+        # --- グレーアウト用オーバーレイ(ウィジェット追加後に描画→最前面) ----------
+        # drawlist は DPG 2.x で pos が効かないため child_window を使用
+        # [1] サーボエリア: ヘッダー(y=73)からサーボ行末尾まで
+        _cover_y = 73
+        _cover_h = (viewport_height - 90) - _cover_y
+        _cover_w = viewport_width - 40
+        with dpg.child_window(tag="TrimCoverOverlay", width=_cover_w, height=_cover_h,
+                              pos=[0, _cover_y], no_scrollbar=True, border=False):
+            pass
+        # [2] ステップツールバー中段(Step2/Step3エリア): Step1とExitの間を塗りつぶす
+        with dpg.child_window(tag="TrimCoverToolbarMid", width=viewport_width - 340, height=39,
+                              pos=[200, 26], no_scrollbar=True, border=False):
+            pass
+        # [3] 下段行全体(Power/Enable/ボタン群) + deltaフィールド(viewport_height-92)まで覆う
+        with dpg.child_window(tag="TrimCoverBottomRow", width=viewport_width, height=100,
+                              pos=[0, viewport_height - 100], no_scrollbar=True, border=False):
+            pass
+        # ウィンドウ背景色と同色テーマを適用
+        with dpg.theme() as _cover_theme:
+            with dpg.theme_component(dpg.mvChildWindow):
+                dpg.add_theme_color(dpg.mvThemeCol_ChildBg, [37, 37, 38, 255])
+                dpg.add_theme_style(dpg.mvStyleVar_WindowPadding, 0, 0)
+        dpg.bind_item_theme("TrimCoverOverlay",    _cover_theme)
+        dpg.bind_item_theme("TrimCoverToolbarMid", _cover_theme)
+        dpg.bind_item_theme("TrimCoverBottomRow",  _cover_theme)
 
-# UDP_SEND_IP_DEF = load_udp_send_ip()        # 送信先のESP32のIPアドレス 21
-# UDP_SEND_IP = get_udp_send_ip()
+        # ステップハイライト用drawlist: overlaysより後に追加して最前面に描画
+        # draw_rectangleはマウスイベントを取らないためボタンは引き続き操作可能
+        # HL1/HL2右端: Step3ボタン右端+5px、ただしExitボタン左端-5pxでキャップ
+        _hl_step3_right = min(_s * 2 + 218, viewport_width - 145)
+        with dpg.drawlist(tag="TrimStepDrawlist", width=viewport_width, height=38, pos=[0, 26]):
+            dpg.draw_rectangle([0, 2], [205, 34], tag="TrimStepHL0",
+                               color=[100, 180, 255, 220], fill=[0, 0, 0, 0],
+                               thickness=2, rounding=4)
+            dpg.draw_rectangle([_s + 5, 2], [_hl_step3_right, 34], tag="TrimStepHL1",
+                               color=[0, 0, 0, 0], fill=[0, 0, 0, 0],
+                               thickness=2, rounding=4)
+            dpg.draw_rectangle([_s + 5, 2], [_hl_step3_right, 34], tag="TrimStepHL2",
+                               color=[0, 0, 0, 0], fill=[0, 0, 0, 0],
+                               thickness=2, rounding=4)
+            dpg.draw_rectangle([viewport_width - 158, 2], [viewport_width - 35, 34], tag="TrimStepHL3",
+                               color=[0, 0, 0, 0], fill=[0, 0, 0, 0],
+                               thickness=2, rounding=4)
+
+        # Start Trim Setting を押すまで行エリアをオーバーレイで隠す
+        set_trim_area_enabled(False)
+
 
 UDP_SEND_IP_DEF, UDP_RECV_IP_DEF, NETWORK_MODE = select_network_mode_and_ip()
 UDP_SEND_IP = UDP_SEND_IP_DEF
@@ -1294,59 +1266,46 @@ UDP_SEND_IP = UDP_SEND_IP_DEF
 # [ 0 ]  初期設定
 # ------------------------------------------------------------------------
 mrd = MeridianConsole()  # Meridianデータのインスタンス
+redis_receiver = RedisReceiver(host=REDIS_HOST, port=REDIS_PORT, redis_key=REDIS_KEY_READ)
+redis_transfer = RedisTransfer(host=REDIS_HOST, port=REDIS_PORT, redis_key=REDIS_KEY_WRITE)
 
 
 def fetch_redis_data():
+    """<- Redis: meridis_calc_pub からhash形式でデータを受信してs_meridimに反映する。"""
     if not mrd.flag_redis_sub:
         return
+    if mrd.flag_ros1_sub:
+        return
+    data = redis_receiver.get_data()
+    if data is None or len(data) != 90:
+        return
+    for i in range(21, 81, 2):
+        mrd.s_meridim[i] = int(data[i] * 100)
 
-    try:
-        r = redis.StrictRedis(
-            host=REDIS_HOST, port=REDIS_PORT, decode_responses=True)
 
-        if not r.exists(REDIS_KEY):
-            print("[Redis Error] Key 'meridis' not found.")
-            return
-
-        data = r.lrange(REDIS_KEY, 0, -1)
-        print(f"[Debug] Raw data from Redis: {data}")
-
-        if len(data) != 90:
-            print(f"[Redis Error] Expected 90 elements, but got {len(data)}.")
-            return
-
-        try:
-            data = [float(x) for x in data]
-            print(f"[Debug] Converted float data: {data}")
-        except ValueError:
-            print("[Redis Error] Invalid data format. Could not convert to float.")
-            return
-
-        if mrd.flag_ros1_sub:
-            print("[Debug] Skipping Redis data application due to ROS1 subscription.")
-            return
-
-        for i in range(21, 81, 2):
-            mrd.s_meridim[i] = int(data[i] * 100)
-
-        print(
-            f"[Debug] Updated s_meridim with Redis data: {mrd.s_meridim[21:81:2]}")
-
-    except redis.ConnectionError:
-        print("[Redis Error] Could not connect to Redis server.")
-    except Exception as e:
-        print(f"[Redis Error] Unexpected error: {str(e)}")
+def send_redis_data():
+    """-> Redis: Axis MonitorのTarget/Actualに連動してs_meridim/r_meridimをchecksum付きで書き込む。"""
+    if not mrd.flag_redis_pub:
+        return
+    src = mrd.s_meridim if mrd.flag_display_mode else mrd.r_meridim
+    s_int16 = np.array(src[:MSG_SIZE-1], dtype=np.int16)
+    checksum = np.int16(~np.sum(s_int16, dtype=np.int16))
+    data = [float(v) / 100.0 for v in src[:MSG_SIZE-1]]
+    data.append(float(checksum))
+    redis_transfer.set_data(data)
 
 
 def meridian_loop():
+    import sys
+    sys.setswitchinterval(0.001)  # GILスイッチ間隔を1msに短縮しGIL待ち時間を削減
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)  # UDP用のsocket設定
-    sock.bind((UDP_RECV_IP_DEF, UDP_RECV_PORT))
+    sock.bind(('', UDP_RECV_PORT))  # 全インターフェースで受信
+    sock.settimeout(0.1)  # Selfモード切替時にrecvfromのブロックを解除するためのタイムアウト
 
-    # sock.bind((get_local_ip(), UDP_RECV_PORT))
     _checksum = np.array([0], dtype=np.int16)
     atexit.register(cleanup)  # この行は機能しているかどうかわからない
 
-    while (True):
+    while mrd.running:
         print("Start.")
         # 180個の要素を持つint8型のNumPy配列を作成
         _r_bin_data_past = np.zeros(180, dtype=np.int8)
@@ -1354,25 +1313,50 @@ def meridian_loop():
         mrd.message1 = "Waiting for UDP data from "+UDP_SEND_IP+"..."
 
         with closing(sock):
-            while True:
+            _prev_self_mode = False  # Self→UDP切り替え検出用
+            _self_next_frame_time = 0.0  # Selfモード絶対タイマー(累積ドリフト補正用)
+            while mrd.running:
                 mrd.loop_count += 1  # このpythonを起動してからのフレーム数をカウントアップ
-                _r_bin_data_past = _r_bin_data
-                _r_bin_data, addr = sock.recvfrom(MSG_BUFF)  # UDPに受信したデータを転記
+                _loop_start = time.time()
 
 # ------------------------------------------------------------------------
 # [ 1 ] : UDPデータの受信
 # ------------------------------------------------------------------------
+                if mrd.flag_self_mode:
+# [ 1-Self ] : Selfモード: UDP受信を無視し s_meridim を r_meridim にコピーして 100Hz 動作
+                    if not _prev_self_mode:
+                        # Self mode 開始: 絶対フレームタイマーを現在時刻から初期化
+                        _self_next_frame_time = _loop_start + 0.01
+                    # [4-1]のチェックサム検証を通過させるためコピー前にチェックサムを計算
+                    mrd.s_meridim[MSG_SIZE-1] = np.int16(~np.sum(mrd.s_meridim[:MSG_SIZE-1], dtype=np.int16))
+                    _self_bin = mrd.s_meridim.tobytes()  # tobytes()でnumpy→bytes直接変換(structより高速)
+                    mrd.r_meridim = struct.unpack('90h', _self_bin)
+                    mrd.r_meridim_ushort = struct.unpack('90H', _self_bin)
+                    mrd.r_meridim_char = struct.unpack('180b', _self_bin)
+                    mrd.message1 = "Self mode: 100Hz (no UDP)"
+                    _prev_self_mode = True
+                else:
+                    # Self→UDP切り替え時: _r_bin_dataをリセットして差分検出を確実にする
+                    if _prev_self_mode:
+                        _r_bin_data_past = np.zeros(180, dtype=np.int8)
+                        _r_bin_data = np.zeros(180, dtype=np.int8)
+                    _prev_self_mode = False
 # [ 1-1 ] : UDPデータの受信を待つループ
-                while np.array_equal(_r_bin_data_past, _r_bin_data):  # 前回受信データと差分があったら進む
-                    _r_bin_data, addr = sock.recvfrom(MSG_BUFF)
+                    try:
+                        _r_bin_data_past = _r_bin_data
+                        _r_bin_data, addr = sock.recvfrom(MSG_BUFF)  # UDPに受信したデータを転記
+                        while np.array_equal(_r_bin_data_past, _r_bin_data):  # 前回受信データと差分があったら進む
+                            _r_bin_data, addr = sock.recvfrom(MSG_BUFF)
+                    except socket.timeout:
+                        continue  # タイムアウト時はループ先頭に戻りflag_self_modeを再チェック
 
 # [ 1-2 ] : 受信UDPデータの変換
-                # 受信データをshort型のMeridim90に変換
-                mrd.r_meridim = struct.unpack('90h', _r_bin_data)
-                mrd.r_meridim_ushort = struct.unpack(
-                    '90H', _r_bin_data)  # unsignedshort型
-                mrd.r_meridim_char = struct.unpack('180b', _r_bin_data)
-                mrd.message1 = "UDP data receiving from "+UDP_SEND_IP  # 受信中のメッセージ表示
+                    # 受信データをshort型のMeridim90に変換
+                    mrd.r_meridim = struct.unpack('90h', _r_bin_data)
+                    mrd.r_meridim_ushort = struct.unpack(
+                        '90H', _r_bin_data)  # unsignedshort型
+                    mrd.r_meridim_char = struct.unpack('180b', _r_bin_data)
+                    mrd.message1 = "UDP data receiving from "+UDP_SEND_IP  # 受信中のメッセージ表示
 
 # [ 1-3 ] : 送信UDPデータのターミナル表示
                 if mrd.flag_disp_send:
@@ -1455,7 +1439,6 @@ def meridian_loop():
                 if mrd.flag_set_flow_or_step < 0:
                     while mrd.flag_stop_flow:
                         if mrd.flag_allow_flow:
-                            print("break")
                             break
                         time.sleep(0.005)  # CPUの負荷を下げる
                     time.sleep(0.001)
@@ -1464,36 +1447,32 @@ def meridian_loop():
 # ------------------------------------------------------------------------
 # [ 4 ] : チェックOKの受信UDPデータについての処理
 # ------------------------------------------------------------------------
-# [ 4-1 ] : チェックサムがOK かつ シーケンス番号が前回と異なっていれば, 処理に回す
-                if (_checksum[0] == mrd.r_meridim[MSG_SIZE-1]) and (mrd.frame_sync_r_recv != mrd.frame_sync_r_last):
+# [ 4-1 ] : チェックサムがOK かつ (Selfモードまたはシーケンス番号が前回と異なっていれば), 処理に回す
+                if (_checksum[0] == mrd.r_meridim[MSG_SIZE-1]) and (mrd.flag_self_mode or mrd.frame_sync_r_recv != mrd.frame_sync_r_last):
 
                     # マスターコマンドがMSG_SIZEより大きければ, 特殊コマンドを実行
                     if (mrd.r_meridim[MRD_MASTER] > MSG_SIZE):
 
                         if mrd.r_meridim[MRD_MASTER] == MCMD_EEPROM_BOARDTOPC_DATA0:
-                            print('rcvd EEPROM[0][*]:' + ' '.join(map(str, mrd.r_meridim)))
-                            for i in range(1, MSG_SIZE - 1):  # positions 1..88 → EEPROM words 1..88
-                                mrd.eeprom_full_buf[i] = mrd.r_meridim[i]
+                            print('rcvd EEPROM[0][*]:' +
+                                  ' '.join(map(str, mrd.r_meridim)))
 
                         if mrd.r_meridim[MRD_MASTER] == MCMD_EEPROM_BOARDTOPC_DATA1:
-                            print('rcvd EEPROM[1][*]:' + ' '.join(map(str, mrd.r_meridim)))
-                            for i in range(1, MSG_SIZE - 1):  # positions 1..88 → EEPROM words 91..178
-                                mrd.eeprom_full_buf[90 + i] = mrd.r_meridim[i]
+                            print('rcvd EEPROM[1][*]:' +
+                                  ' '.join(map(str, mrd.r_meridim)))
                             # EEPROMからのデータを処理してチェックボックスに反映
                             process_eeprom_data()
 
                         if mrd.r_meridim[MRD_MASTER] == MCMD_EEPROM_BOARDTOPC_DATA2:
-                            print('rcvd EEPROM[2][*]:' + ' '.join(map(str, mrd.r_meridim)))
-                            for i in range(1, MSG_SIZE - 1):  # positions 1..88 → EEPROM words 181..268
-                                mrd.eeprom_full_buf[180 + i] = mrd.r_meridim[i]
+                            print('rcvd EEPROM[2][*]:' +
+                                  ' '.join(map(str, mrd.r_meridim)))
 
                         mrd.s_meridim[MRD_MASTER] = 90
 
                     # 以降は特殊コマンドではなく, 通常フローの実行
                     else:
                         # 受信データを送信データに転記
-                        for i in range(MSG_SIZE-1):
-                            mrd.s_meridim[i] = mrd.r_meridim[i]
+                        mrd.s_meridim[:MSG_SIZE-1] = mrd.r_meridim[:MSG_SIZE-1]
 
     # [ 4-2 ] : シーケンス番号の処理
                         mrd.frame_sync_r_expect += 1  # 予想シーケンス番号のカウントアップ
@@ -1548,7 +1527,6 @@ def meridian_loop():
                         if mrd.flag_demo_action:
                             # xをフレームごとにカウントアップ
                             mrd.x += math.pi/STEP
-                            print("DEMO motion:", mrd.s_meridim_motion_f[21:81:2])
                             if mrd.x > math.pi*2000:
                                 mrd.x = 0
 
@@ -1587,32 +1565,9 @@ def meridian_loop():
                         # redisからのデータを仮にここで処理
                         fetch_redis_data()
 
-                        # if mrd.flag_python_action:  # コード書式は自由だが, 仮にすべての関節角度に0を代入する場合の例
-                        #     mrd.s_meridim_motion_f[21] = 0  # 頭ヨー
-                        #     mrd.s_meridim_motion_f[23] = 0  # 左肩ピッチ
-                        #     mrd.s_meridim_motion_f[25] = 0  # 左肩ロール
-                        #     mrd.s_meridim_motion_f[27] = 0  # 左肘ヨー
-                        #     mrd.s_meridim_motion_f[29] = 0  # 左肘ピッチ
-                        #     mrd.s_meridim_motion_f[31] = 0  # 左股ヨー
-                        #     mrd.s_meridim_motion_f[33] = 0  # 左股ロール
-                        #     mrd.s_meridim_motion_f[35] = 0  # 左股ピッチ
-                        #     mrd.s_meridim_motion_f[37] = 0  # 左膝ピッチ
-                        #     mrd.s_meridim_motion_f[39] = 0  # 左足首ピッチ
-                        #     mrd.s_meridim_motion_f[41] = 0  # 左足首ロール
-                        #     mrd.s_meridim_motion_f[51] = 0  # 腰ヨー
-                        #     mrd.s_meridim_motion_f[53] = 0  # 右肩ピッチ
-                        #     mrd.s_meridim_motion_f[55] = 0  # 右肩ロール
-                        #     mrd.s_meridim_motion_f[57] = 0  # 右肘ヨー
-                        #     mrd.s_meridim_motion_f[59] = 0  # 右肘ピッチ
-                        #     mrd.s_meridim_motion_f[61] = 0  # 右股ヨー
-                        #     mrd.s_meridim_motion_f[63] = 0  # 右股ロール
-                        #     mrd.s_meridim_motion_f[65] = 0  # 右股ピッチ
-                        #     mrd.s_meridim_motion_f[67] = 0  # 右膝ピッチ
-                        #     mrd.s_meridim_motion_f[69] = 0  # 右足首ピッチ
-                        #     mrd.s_meridim_motion_f[71] = 0  # 右足首ロール
 
-    # [ 5-2 ] : サーボ位置リセットボタン(Home)が押下されていたら全サーボ位置をゼロリセット
-                        if mrd.flag_servo_home > 0:
+    # [ 5-2 ] : [Zero]ボタン押下時に全サーボ位置=0を送信(Board trim適用後 → Trim Zero)
+                        if mrd.flag_servo_zero > 0:
                             for i in range(MRD_SERVO_SLOTS):
                                 mrd.s_meridim[MRD_L_ORIG_IDX + 1 + i * 2] = 0
                                 mrd.s_meridim[MRD_R_ORIG_IDX + 1 + i * 2] = 0
@@ -1620,7 +1575,7 @@ def meridian_loop():
                                 mrd.s_meridim_motion_f[MRD_R_ORIG_IDX + 1 + i * 2] = 0
                                 mrd.s_meridim_motion_keep_f[MRD_L_ORIG_IDX + 1 + i * 2] = 0
                                 mrd.s_meridim_motion_keep_f[MRD_R_ORIG_IDX + 1 + i * 2] = 0
-                            mrd.flag_servo_home = 0
+                            mrd.flag_servo_zero = 0
 
     # [ 5-3 ] : PC側発行のサーボ位置をs_meridimに書き込む
                         if mrd.flag_enable_send_made_data:  # PC側発行データの送信Enable判定
@@ -1631,12 +1586,7 @@ def meridian_loop():
                                     mrd.s_meridim[i] = int(mrd.s_meridim_motion_keep_f[i]*100)
 
     # [ 5-4 ] : サーボオンオフフラグチェック：サーボオンフラグを格納
-                        if mrd.flag_servo_power > 0:
-                            for i in range(20, 80, 2):
-                                mrd.s_meridim[i] = 1
-                        else:
-                            for i in range(20, 80, 2):
-                                mrd.s_meridim[i] = 0
+                        mrd.s_meridim[20:80:2] = 1 if mrd.flag_servo_power > 0 else 0
 
     # [ 5-5 ] : リモコンデータをリセットし, PCからのリモコン入力値を格納
                         # temp = np.array([0], dtype=np.uint16)  # uint16に変更
@@ -1707,19 +1657,17 @@ def meridian_loop():
                         if mrd.flag_terminal_mode_send > 0:  # ミニターミナルの送信モードの確認
                             print_string = ""
                             for i in range(8):
-                                if ((mrd.s_minitermnal_keep[i][0] >= 0) and (mrd.s_minitermnal_keep[i][0] < MSG_SIZE)):
-                                    mrd.s_meridim[int(mrd.s_minitermnal_keep[i][0])] = int(
-                                        mrd.s_minitermnal_keep[i][1])
+                                if ((mrd.s_miniterminal_keep[i][0] >= 0) and (mrd.s_miniterminal_keep[i][0] < MSG_SIZE)):
+                                    mrd.s_meridim[int(mrd.s_miniterminal_keep[i][0])] = int(
+                                        mrd.s_miniterminal_keep[i][1])
                                     print_string = print_string + \
-                                        "["+str(int(mrd.s_minitermnal_keep[i][0]))+"] " + \
-                                        str(int(mrd.s_minitermnal_keep[i][1]))+", "
+                                        "["+str(int(mrd.s_miniterminal_keep[i][0]))+"] " + \
+                                        str(int(mrd.s_miniterminal_keep[i][1]))+", "
                                     # サーボパワーオン時のキープ配列にも反映しておく. こうするとミニターミナルから脱力してサーボを回転させた後にサーボパワーオンで位置の固定ができる
-                                    mrd.s_meridim_motion_keep_f[int(mrd.s_minitermnal_keep[i][0])] = int(
-                                        mrd.s_minitermnal_keep[i][1]*0.01)
+                                    mrd.s_meridim_motion_keep_f[int(mrd.s_miniterminal_keep[i][0])] = int(
+                                        mrd.s_miniterminal_keep[i][1]*0.01)
 
                             if mrd.flag_terminal_mode_send == 2:  # 送信データを一回表示
-                                print("Sending data : ")
-                                print(print_string[:-2])  # 末尾のカンマ以外を表示
                                 mrd.flag_terminal_mode_send = 1
 
                             if mrd.flag_send_miniterminal_data_once == 1:    # ミニターミナルの値を1回送信する
@@ -1727,23 +1675,12 @@ def meridian_loop():
                                 mrd.flag_send_miniterminal_data_once = 0
 
 # [ 5-10 ] : 特殊コマンドのデータ送信処理
-                    # キューがあれば先頭パケットを使用, なければspecial配列を使用 [6-2]で完了処理
-                    if len(mrd.special_command_queue) > 0:
-                        packet = mrd.special_command_queue.pop(0)
-                        for i in range(MSG_SIZE):
-                            mrd.s_meridim[i] = packet[i]
-                        # シーケンス番号をframe_sync_sで更新 (ESP32のシーケンスチェックを通過させる)
-                        if mrd.frame_sync_s > 32767:
-                            mrd.s_meridim[1] = mrd.frame_sync_s - 65536
-                        else:
-                            mrd.s_meridim[1] = mrd.frame_sync_s
-                        mrd.flag_special_command_send = 1
-                    elif mrd.flag_special_command_send > 0:
+                    # 特殊コマンド送信モードの判定 [6-2]で完了処理
+                    if mrd.flag_special_command_send > 0:
                         for i in range(MSG_SIZE):
                             mrd.s_meridim[i] = mrd.s_meridim_special[i]
 
                         # 送信用シーケンス番号の作成と格納
-                        # mrd.frame_sync_s += 1  # 送信用のframe_sync_sをカウントアップ
                         if mrd.frame_sync_s > 59999:  # 60,000以上ならゼロリセット
                             mrd.frame_sync_s = 0
                         if mrd.frame_sync_s > 32767:  # unsigned short として取り出せるようなsinged shortに変換
@@ -1768,14 +1705,21 @@ def meridian_loop():
     # [ 6-1 ] : UDPデータの送信処理
                     s_bin_data = struct.pack(
                         '90h', *mrd.s_meridim)       # データをパック
-                    sock.sendto(s_bin_data, (UDP_SEND_IP,
-                                UDP_SEND_PORT))  # UDP送信
+                    if not mrd.flag_self_mode:
+                        sock.sendto(s_bin_data, (UDP_SEND_IP,
+                                    UDP_SEND_PORT))  # UDP送信
+                    send_redis_data()              # -> Redis: s_meridimをRedisに書き込む
                     now = time.time()-mrd.start+0.0001
-    # [ 6-2 ] : 特殊コマンドのデータ送信の完了処理(キューが空のときのみクリア)
-                    if mrd.flag_special_command_send > 0 and len(mrd.special_command_queue) == 0:
+    # [ 6-2 ] : 特殊コマンドのデータ送信の完了処理
+                    if mrd.flag_special_command_send > 0:
+                        _last_special_cmd = int(mrd.s_meridim_special[MRD_MASTER])
                         mrd.s_meridim_special = np.zeros(
                             MSG_SIZE, dtype=np.int16)  # 特殊コマンド用のデータをクリア
                         mrd.flag_special_command_send = 0  # 特殊コマンドの送信フラグを下げる
+                        # SAVE_TRIM直後はStart Trim Settingと同じコマンドを続けて送信
+                        # → EEPROMから保存済みtrimを再ロードしてTrim Zeroへ移動, trimモードに戻る
+                        if _last_special_cmd == MCMD_EEPROM_SAVE_TRIM:
+                            start_trim_setting()
 
     # ------------------------------------------------------------------------
     # [ 7 ] : 表示処理
@@ -1786,26 +1730,30 @@ def meridian_loop():
                         # [ 7-1 ] : Axis monitor の表示データ切り替え
                         # 1=target data(send data),0= actual data(received data)
                         if mrd.flag_display_mode:
-                            # 送信データを表示用データに転記
-                            for i in range(MSG_SIZE-1):
-                                mrd.d_meridim[i] = mrd.s_meridim[i]
+                            mrd.d_meridim[:MSG_SIZE-1] = mrd.s_meridim[:MSG_SIZE-1]
                         else:
-                            # 受信データを表示用データに転記
-                            for i in range(MSG_SIZE-1):
-                                mrd.d_meridim[i] = mrd.r_meridim[i]
+                            mrd.d_meridim[:MSG_SIZE-1] = mrd.r_meridim[:MSG_SIZE-1]
 
-    # [ 7-2 ] : メッセージウィンドウの表示更新
-                        mrd.message2 = "ERROR COUNT ESP-PC:"+str("{:}".format(mrd.error_count_esp_to_pc)) + " PC-ESP:"+str("{:}".format(mrd.error_count_pc_to_esp))+" ESP-TSY:"+str(
-                            "{:}".format(mrd.error_count_esp_to_tsy)) + " TSY_Delay:"+str("{:}".format(mrd.error_count_tsy_delay)) + "    Servo_trouble:"+mrd.error_servo_id
+    # [ 7-2 ] : メッセージウィンドウの表示更新(3フレームに1回)
+                        if mrd.loop_count % 3 == 0:
+                            mrd.message2 = "ERROR COUNT ESP-PC:"+str("{:}".format(mrd.error_count_esp_to_pc)) + " PC-ESP:"+str("{:}".format(mrd.error_count_pc_to_esp))+" ESP-TSY:"+str(
+                                "{:}".format(mrd.error_count_esp_to_tsy)) + " TSY_Delay:"+str("{:}".format(mrd.error_count_tsy_delay)) + "    Servo_trouble:"+mrd.error_servo_id
 
-                        mrd.message3 = "ERROR RATE ESP-PC:"+str("{:.2%}".format(mrd.error_count_esp_to_pc/mrd.loop_count)) + " PC-ESP:"+str("{:.2%}".format(mrd.error_count_pc_to_esp/mrd.loop_count))+" ESP-TSY:"+str("{:.2%}".format(
-                            mrd.error_count_esp_to_tsy/mrd.loop_count)) + " TsySKIP:"+str("{:.2%}".format(mrd.error_count_tsy_skip/mrd.loop_count)) + " ESPSKIP:" + str("{:.2%}".format(mrd.error_count_esp_skip/mrd.loop_count))
+                            mrd.message3 = "ERROR RATE ESP-PC:"+str("{:.2%}".format(mrd.error_count_esp_to_pc/mrd.loop_count)) + " PC-ESP:"+str("{:.2%}".format(mrd.error_count_pc_to_esp/mrd.loop_count))+" ESP-TSY:"+str("{:.2%}".format(
+                                mrd.error_count_esp_to_tsy/mrd.loop_count)) + " TsySKIP:"+str("{:.2%}".format(mrd.error_count_tsy_skip/mrd.loop_count)) + " ESPSKIP:" + str("{:.2%}".format(mrd.error_count_esp_skip/mrd.loop_count))
 
-                        mrd.message4 = "SKIP COUNT Tsy:" + str("{:}".format(mrd.error_count_tsy_skip))+" ESP:"+str("{:}".format(mrd.error_count_esp_skip))+" PC:"+str("{:}".format(mrd.error_count_pc_skip)) + " Servo:"+str(
-                            "{:}".format(mrd.error_count_servo_skip))+" PCframe:"+str(mrd.loop_count)+" BOARDframe:"+str(mrd.frame_sync_r_recv)+" "+str(int(mrd.loop_count/now))+"Hz"
+                            mrd.message4 = "SKIP COUNT Tsy:" + str("{:}".format(mrd.error_count_tsy_skip))+" ESP:"+str("{:}".format(mrd.error_count_esp_skip))+" PC:"+str("{:}".format(mrd.error_count_pc_skip)) + " Servo:"+str(
+                                "{:}".format(mrd.error_count_servo_skip))+" PCframe:"+str(mrd.loop_count)+" BOARDframe:"+str(mrd.frame_sync_r_recv)+" "+str(int(mrd.loop_count/now))+"Hz"
 
                         # 今回受信のシーケンス番号を次回比較用にキープ
                         mrd.frame_sync_r_last = mrd.frame_sync_r_recv
+
+                        # Selfモード: 累積絶対タイマーで100Hz維持(ドリフト自己補正)
+                        if mrd.flag_self_mode:
+                            _remain = _self_next_frame_time - time.time()
+                            if _remain > 0.0:
+                                _select.select([], [], [], _remain)
+                            _self_next_frame_time += 0.01
 
 # ------------------------------------------------------------------------
 # [ 8 ] : シーケンス番号が更新されていなければ待機して[1-1]]に戻る
@@ -1844,12 +1792,18 @@ def set_servo_angle(channel, app_data):
     if channel[3] == "L":
         mrd.s_meridim[int(channel[4:6])*2+21] = int(app_data * 100)
         mrd.s_meridim_motion_f[int(channel[4:6])*2+21] = app_data
-        print(f"L{channel[4:6]}[{int(channel[4:6])*2+21}]:{int(app_data*100)}")
+
+        # Trim Settingウィンドウが開かれている場合は, 対応するスライダーを更新
+        if mrd.flag_trim_window_open and dpg.does_item_exist(f"Trim_L{channel[4:6]}"):
+            dpg.set_value(f"Trim_L{channel[4:6]}", app_data)
 
     if channel[3] == "R":
         mrd.s_meridim[int(channel[4:6])*2+51] = int(app_data * 100)
         mrd.s_meridim_motion_f[int(channel[4:6])*2+51] = app_data
-        print(f"R{channel[4:6]}[{int(channel[4:6])*2+51}]:{int(app_data*100)}")
+
+        # Trim Settingウィンドウが開かれている場合は, 対応するスライダーを更新
+        if mrd.flag_trim_window_open and dpg.does_item_exist(f"Trim_R{channel[4:6]}"):
+            dpg.set_value(f"Trim_R{channel[4:6]}", app_data)
 
 
 # [Axis Monitor] ウィンドウのTarget, Actual 切り替えラジオボタン処理
@@ -1857,53 +1811,43 @@ def change_display_mode(sender, app_data, user_data):
     chosen_option = dpg.get_value(sender)
     if chosen_option == "Target":
         mrd.flag_display_mode = 1
-        print("Target mode selected")
+        mrd.flag_ros1_output_mode = 1
     elif chosen_option == "Actual":
         mrd.flag_display_mode = 0
-        print("Actual mode selected")
+        mrd.flag_ros1_output_mode = 0
 
 
-# [Axis Monitor] ウィンドウのhomeボタン処理
-def set_servo_home():
-    mrd.flag_servo_home = push_button_flag("Set all servo position zero.")
-
-    # スライダーの値も0にリセット
+def send_raw_zero_temp():
+    """Trim Settingウィンドウ用のRaw Zero。トリムスライダー値を保持したままangle=0を送信する。
+    Trim Zeroボタンで編集中のトリム位置に戻れる。"""
     for i in range(MRD_SERVO_SLOTS):
-        # Axis Monitorのスライダーをリセット
+        l_ix = MRD_L_ORIG_IDX + 1 + i * 2
+        r_ix = MRD_R_ORIG_IDX + 1 + i * 2
+        mrd.s_meridim[l_ix] = 0
+        mrd.s_meridim[r_ix] = 0
+        mrd.s_meridim_motion_f[l_ix] = 0
+        mrd.s_meridim_motion_f[r_ix] = 0
+        mrd.s_meridim_motion_keep_f[l_ix] = 0
+        mrd.s_meridim_motion_keep_f[r_ix] = 0
         dpg.set_value(f"ID L{i}", 0)
         dpg.set_value(f"ID R{i}", 0)
-
-        # Trim Settingウィンドウが開いている場合は, そのスライダーも更新
-        if mrd.flag_trim_window_open:
-            if dpg.does_item_exist(f"Trim_L{i}"):
-                dpg.set_value(f"Trim_L{i}", 0)
-            if dpg.does_item_exist(f"Trim_R{i}"):
-                dpg.set_value(f"Trim_R{i}", 0)
-
-# [Trim Setting] ウィンドウでのホームボタン処理関数
+    print("Raw Zero: Servos moved to mechanical zero (trim sliders preserved).")
 
 
-def set_trim_home():
-    set_servo_home()
-
-    # 特殊コマンドのデータ用のMeridim配列を初期化
-    mrd.s_meridim_special = np.zeros(MSG_SIZE, dtype=np.int16)
-
-    # 受信データを特殊コマンド用の配列に転記(現在のサーボ値をそのまま使う)
-    for i in range(MSG_SIZE):
-        mrd.s_meridim_special[i] = mrd.r_meridim[i]
-
-    # Meridim配列の全サーボ位置に0を入れて送信 ####
+def send_trim_zero_restore():
+    """現在のトリムスライダー値からサーボ位置を復元する(Raw Zeroから編集状態に戻る)。"""
     for i in range(MRD_SERVO_SLOTS):
-        left_ix = MRD_L_ORIG_IDX + 1 + i * 2
-        right_ix = MRD_R_ORIG_IDX + 1 + i * 2
-
-        mrd.s_meridim_special[left_ix] = 0
-        mrd.s_meridim_special[right_ix] = 0
-
-    mrd.s_meridim_special[MRD_MASTER] = MSG_SIZE
-
-    mrd.flag_special_command_send = 1
+        for side, orig_idx in [("L", MRD_L_ORIG_IDX), ("R", MRD_R_ORIG_IDX)]:
+            servo_ix = f"{side}{i}"
+            tag = f"Trim_{servo_ix}"
+            trim_val = dpg.get_value(tag) if dpg.does_item_exist(tag) else 0.0
+            cw = -1 if mrd.servo_direction.get(servo_ix, False) else 1
+            pos = trim_val * cw
+            mrd.s_meridim[orig_idx + 1 + i * 2] = int(pos * 100)
+            mrd.s_meridim_motion_f[orig_idx + 1 + i * 2] = pos
+            mrd.s_meridim_motion_keep_f[orig_idx + 1 + i * 2] = pos
+            dpg.set_value(f"ID {servo_ix}", trim_val)
+    print("Trim Zero: Restored servo positions from trim sliders.")
 
 
 # [Message] ウィンドウの送信データ表示処理
@@ -1927,7 +1871,7 @@ def set_disp_rcvd():
 
 
 # [Message] ウィンドウの reset cycle ボタン処理
-def reset_cycle():  # カウンターのリセット
+def reset_cycle():  # サイクルのリセット
     mrd.frag_reset_cycle = True
 
 
@@ -1988,10 +1932,6 @@ def set_python_action(sender, app_data, user_data):
     mrd.flag_python_action = flip_number(
         app_data, "Start python motion data streaming.", "Quit python motion data streaming.")
 
-    # Trim Settingウィンドウが開かれている場合は, そちらのPythonチェックボックスも更新
-    if mrd.flag_trim_window_open and dpg.does_item_exist("Python_Trim"):
-        dpg.set_value("Python_Trim", app_data)
-
 
 # [command] ウィンドウのEnableフラグ処理
 def set_enable(sender, app_data, user_data):
@@ -2001,6 +1941,23 @@ def set_enable(sender, app_data, user_data):
     # Trim Settingウィンドウが開かれている場合は, そちらのEnableチェックボックスも更新
     if mrd.flag_trim_window_open and dpg.does_item_exist("Enable_Trim"):
         dpg.set_value("Enable_Trim", app_data)
+
+
+# [command] SelfモードのON/OFF
+def set_self_mode(sender, app_data, user_data):
+    mrd.flag_self_mode = app_data
+    if not app_data:
+        # Restore flow/step state from radio button when disabling self mode
+        try:
+            if dpg.get_value("transaction_mode") == "Step":
+                mrd.flag_set_flow_or_step = -1
+                mrd.flag_stop_flow = True
+            else:
+                mrd.flag_set_flow_or_step = 1
+                mrd.flag_stop_flow = False
+        except Exception:
+            mrd.flag_set_flow_or_step = 1
+            mrd.flag_stop_flow = False
 
 
 # [command] ウィンドウのROS1データ送信モードをtarget/actualに切り替え
@@ -2051,13 +2008,13 @@ def set_miniterminal_data():  # ミニターミナルのセットボタンが押
                     print_string = print_string + \
                         "[" + str(dpg.get_value(_value_tag_index)) + "] " + \
                         str(dpg.get_value(_value_tag_data)) + ", "
-                    mrd.s_minitermnal_keep[i][0] = int(
+                    mrd.s_miniterminal_keep[i][0] = int(
                         dpg.get_value(_value_tag_index))
-                    mrd.s_minitermnal_keep[i][1] = int(
+                    mrd.s_miniterminal_keep[i][1] = int(
                         dpg.get_value(_value_tag_data))
                 else:
                     # 該当しないデータにはインデックスに-1を指定して送信データに反映されないようにしておく
-                    mrd.s_minitermnal_keep[i][0] = -1
+                    mrd.s_miniterminal_keep[i][0] = -1
                     print_string = print_string + \
                         "["+str(dpg.get_value(_value_tag_index)) + \
                         "] out of range, "
@@ -2075,9 +2032,7 @@ def set_terminal_continuous_on(sender, app_data):  # ボタン押下でset_flow�
         print("Stop to send miniterminal data.")
         for i in range(8):
             # 該当しないデータにはインデックスに-1を指定して送信データに反映されないようにしておく
-            mrd.s_minitermnal_keep[i][0] = -1
-            # 該当しないデータにはインデックスに-1を指定して送信データに反映されないようにしておく
-            # mrd.s_minitermnal_keep[i][1] = 0
+            mrd.s_miniterminal_keep[i][0] = -1
 
 
 # [Mini Terminal] ウィンドウのSendボタン処理
@@ -2090,9 +2045,9 @@ def set_terminal_send_on():  # ボタン押下でset_flowフラグをオン
         # print("Stop to send miniterminal data.")
         for i in range(8):
             # 該当しないデータにはインデックスに-1を指定して送信データに反映されないようにしておく
-            mrd.s_minitermnal_keep[i][0] = -1
+            mrd.s_miniterminal_keep[i][0] = -1
             # 該当しないデータにはインデックスに-1を指定して送信データに反映されないようにしておく
-            mrd.s_minitermnal_keep[i][1] = 0
+            mrd.s_miniterminal_keep[i][1] = 0
 
 
 # [Mini Terminal] ウィンドウのset&sendボタン処理
@@ -2108,38 +2063,271 @@ def set_transaction_mode(sender, app_data):
         mrd.flag_set_flow_or_step = 2
         # mrd.flag_flow_switch = True
         mrd.flag_stop_flow = False
-        print("Set flow to Meridian.")
     elif app_data == "Step":  # ボタン押下でset_stepフラグをオン
         mrd.flag_set_flow_or_step = -2
         # mrd.flag_flow_switch = True
         mrd.flag_stop_flow = True
-        print("Set step to Meridian.")
 
 
 # [Mini Terminal] ウィンドウの Next frame ボタン処理
-def send_data_step_frame():  # チェックボックスに従いアクション送信フラグをオンオフ
-    mrd.flag_stop_flow = False
-    # mrd.flag_allow_flow = True
-    print("Return: Send data and step to the next frame.")
+def send_data_step_frame():
+    if mrd.flag_self_mode and mrd.flag_set_flow_or_step >= 0:
+        # Self mode + Flow mode: activate step behavior so [3] will block next frame
+        mrd.flag_set_flow_or_step = -1
+    mrd.flag_stop_flow = False  # release current frame
+
+
+def redis_pub():
+    """RedisへのパブリッシュをON/OFF"""
+    if mrd.flag_redis_pub:
+        mrd.flag_redis_pub = False
+    else:
+        mrd.flag_redis_pub = True
 
 
 def redis_sub():
     """RedisのサブスクライブをON/OFF"""
-    print(
-        f"[Debug] Redis checkbox clicked. Current flag_redis_sub: {mrd.flag_redis_sub}")
     if mrd.flag_redis_sub:
-        print("Stopping Redis subscription.")
         mrd.flag_redis_sub = False
     else:
-        print("Starting Redis subscription.")
         mrd.flag_redis_sub = True
+
+
+# ---- Valkey Connect ウィンドウ用 -----------------------------------------------------------------------
+
+_BOARD_IP_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "board_ip.txt")
+_VALKEY_DEFAULT_KEYS = ["merikey_real_pub", "meridis_real_pub"]
+_VALKEY_SERVER = "/opt/homebrew/bin/valkey-server"
+_VALKEY_CLI    = "/opt/homebrew/bin/valkey-cli"
+
+
+def _valkey_load_keys():
+    """board_ip.txt から VALKEY_PUBLISH_KEYS を読み込む。なければデフォルトを返す。"""
+    try:
+        with open(_BOARD_IP_FILE, 'r') as f:
+            for line in f:
+                if line.startswith('VALKEY_PUBLISH_KEYS='):
+                    val = line.split('=', 1)[1].strip().strip('"')
+                    keys = [k.strip() for k in val.split(',') if k.strip()]
+                    if keys:
+                        return keys
+    except Exception:
+        pass
+    return list(_VALKEY_DEFAULT_KEYS)
+
+
+def _valkey_save_keys(keys):
+    """Valkeyキーリストを board_ip.txt に保存。"""
+    line_new = f'VALKEY_PUBLISH_KEYS="{",".join(keys)}"\n'
+    try:
+        lines = open(_BOARD_IP_FILE).readlines()
+        found = False
+        for i, l in enumerate(lines):
+            if l.startswith('VALKEY_PUBLISH_KEYS='):
+                lines[i] = line_new
+                found = True
+                break
+        if not found:
+            lines.append(line_new)
+        with open(_BOARD_IP_FILE, 'w') as f:
+            f.writelines(lines)
+    except Exception as e:
+        print(f"[Valkey] Config save error: {e}")
+
+
+def valkey_start():
+    """Valkeyサーバーをバックグラウンドで起動し、Publishキーを hset 初期化。"""
+    def _run():
+        try:
+            # 既に起動中であればサーバー起動をスキップ
+            try:
+                _c = redis.Valkey(host=REDIS_HOST, port=REDIS_PORT,
+                                  socket_connect_timeout=0.5)
+                _c.ping()
+                _c.close()
+                print("[Valkey] Server already running. Skipping start.")
+                _init_keys()  # _reconnect_transfer() も内部で呼ばれる
+                _valkey_update_status()
+                return
+            except Exception:
+                pass
+
+            cmd = f'{_VALKEY_SERVER} --save "" --dir /tmp --dbfilename valkey_meridis.rdb'
+            proc = subprocess.Popen(cmd, shell=True,
+                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                    start_new_session=True)
+            print(f"[Valkey] Server starting (PID {proc.pid})...")
+            # 起動完了を最大5秒待つ
+            for _ in range(50):
+                time.sleep(0.1)
+                if proc.poll() is not None:
+                    print(f"[Valkey] Server exited early (rc={proc.returncode}).")
+                    return
+                try:
+                    client = redis.Valkey(host=REDIS_HOST, port=REDIS_PORT,
+                                         socket_connect_timeout=0.3)
+                    client.ping()
+                    client.close()
+                    break
+                except Exception:
+                    continue
+            else:
+                print("[Valkey] Server did not respond within 5s.")
+                return
+            _init_keys()
+            _valkey_update_status()
+        except Exception as e:
+            print(f"[Valkey] Start error: {e}")
+            _valkey_update_status()
+
+    def _reconnect_transfer():
+        """redis_transfer が未接続なら再接続を試みる。"""
+        if not redis_transfer.is_connected:
+            try:
+                redis_transfer.redis_client.ping()
+                redis_transfer.is_connected = True
+            except Exception:
+                pass
+
+    def _init_keys():
+        keys = list(dpg.get_item_configuration("connect_publish_combo")["items"])
+        client = redis.Valkey(host=REDIS_HOST, port=REDIS_PORT, decode_responses=True)
+        for key in keys:
+            if not client.exists(key):
+                client.hset(key, mapping={str(i): "0" for i in range(90)})
+            print(f"[Valkey] Key ready: '{key}'")
+        client.close()
+        _reconnect_transfer()
+
+    threading.Thread(target=_run, daemon=True).start()
+
+
+def valkey_reset():
+    """Valkey の全データをフラッシュ。"""
+    try:
+        client = redis.Valkey(host=REDIS_HOST, port=REDIS_PORT, decode_responses=True,
+                              socket_connect_timeout=1.0)
+        client.flushall()
+        client.close()
+        print("[Valkey] FLUSHALL executed.")
+    except Exception as e:
+        print(f"[Valkey] Reset error: {e}")
+
+
+def valkey_shutdown():
+    """Valkey サーバーをシャットダウン。"""
+    for cmd in [[_VALKEY_CLI, 'shutdown'], ['redis-cli', 'shutdown']]:
+        try:
+            subprocess.run(cmd, timeout=3,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            print(f"[Valkey] Shutdown via {cmd[0]}.")
+            threading.Thread(target=lambda: (time.sleep(0.5), _valkey_update_status()),
+                             daemon=True).start()
+            return
+        except Exception:
+            continue
+    print("[Valkey] Shutdown failed.")
+    _valkey_update_status()
+
+
+def valkey_publish_changed(sender, app_data):
+    """Publishドロップダウン変更: redis_transfer の書き込み先キーを切り替え。"""
+    redis_transfer.redis_key = app_data
+    print(f"[Valkey] Publish key → '{app_data}'")
+
+
+def valkey_subscribe_changed(sender, app_data):
+    """Subscribeドロップダウン変更: redis_receiver の受信先キーを切り替え。"""
+    redis_receiver.redis_key = app_data
+    print(f"[Valkey] Subscribe key → '{app_data}'")
+
+
+def valkey_key_add():
+    """テキスト入力のキーを Publish/Subscribe ドロップダウンに追加し保存。"""
+    new_key = dpg.get_value("connect_key_input").strip()
+    if not new_key:
+        return
+    items = list(dpg.get_item_configuration("connect_publish_combo")["items"])
+    if new_key not in items:
+        items.append(new_key)
+        dpg.configure_item("connect_publish_combo", items=items)
+        dpg.configure_item("connect_subscribe_combo", items=items)
+        _valkey_save_keys(items)
+        print(f"[Valkey] Key added: '{new_key}'")
+
+
+def valkey_key_del():
+    """選択中の Publish キーを両ドロップダウンから削除し保存。"""
+    selected = dpg.get_value("connect_publish_combo")
+    items = list(dpg.get_item_configuration("connect_publish_combo")["items"])
+    if selected in items:
+        items.remove(selected)
+        dpg.configure_item("connect_publish_combo", items=items)
+        dpg.configure_item("connect_subscribe_combo", items=items)
+        new_sel = items[0] if items else ""
+        dpg.set_value("connect_publish_combo", new_sel)
+        redis_transfer.redis_key = new_sel
+        _valkey_save_keys(items)
+        print(f"[Valkey] Key removed: '{selected}'")
+
+
+def valkey_keys_refresh():
+    """Valkeyの KEYS * を取得してモーダルのテキストを更新。"""
+    try:
+        client = redis.Valkey(host=REDIS_HOST, port=REDIS_PORT,
+                              socket_connect_timeout=0.5, decode_responses=True)
+        keys = sorted(client.keys('*'))
+        client.close()
+        text = '\n'.join(keys) if keys else "(no keys)"
+    except Exception as e:
+        text = f"Not connected:\n{e}"
+    dpg.set_value("valkey_keys_text", text)
+
+
+def valkey_disp_keys():
+    """Disp Keys モーダルを開き、キー一覧を表示。"""
+    valkey_keys_refresh()
+    dpg.configure_item("valkey_keys_modal", show=True)
+
+
+# ---------- Valkey server status indicator ----------
+
+def _valkey_check_online():
+    """Port 6379 へのTCP接続でValkeyの起動状態を確認(軽量)。"""
+    try:
+        conn = socket.create_connection(("127.0.0.1", REDIS_PORT), timeout=0.2)
+        conn.close()
+        return True
+    except Exception:
+        return False
+
+
+def _valkey_update_status():
+    """valkey_status_text の表示色・テキストを最新状態に更新。"""
+    online = _valkey_check_online()
+    try:
+        if online:
+            dpg.set_value("valkey_status_text", "Valkey Server On")
+            dpg.configure_item("valkey_status_text", color=(64, 200, 224, 255))
+        else:
+            dpg.set_value("valkey_status_text", "Valkey Server Off")
+            dpg.configure_item("valkey_status_text", color=(128, 128, 128, 255))
+    except Exception:
+        pass
+
+
+def _valkey_status_loop():
+    """1秒ごとにValkeyの起動状態を確認してUIを更新するバックグラウンドスレッド。"""
+    while mrd.running:
+        _valkey_update_status()
+        time.sleep(1.0)
 
 
 # ================================================================================================================
 # ---- dearpyguiによるコンソール画面描写 -----------------------------------------------------------------------------
 # ================================================================================================================
 def main():
-    while (True):
+    while mrd.running:
 
         # dpg描画処理1 ==========================================================
         dpg.create_context()
@@ -2162,7 +2350,7 @@ def main():
                     dpg.add_slider_float(default_value=0, tag="ID L"+str(i), label="L"+str(i),
                                          max_value=180, min_value=-180, callback=set_servo_angle, pos=[135, 35 + i * 20], width=80)
 
-            dpg.add_button(label="Home", callback=set_servo_home, pos=[10, 340], width=40)
+            dpg.add_button(label="Zero", callback=load_trimdata_from_eeprom_to_board, pos=[10, 340], width=40)
             dpg.add_button(label="Trim", callback=open_trim_window, pos=[55, 340], width=40)
             dpg.add_radio_button(label="display_mode", items=["Target", "Actual"], callback=change_display_mode,
                                  default_value="Actual", pos=[100, 340], horizontal=True)
@@ -2223,22 +2411,25 @@ def main():
 # ------------------------------------------------------------------------
         with dpg.window(label="Command", width=335, height=190, pos=[260, 185]):
             dpg.add_checkbox(label="Power", tag="Power", callback=set_servo_power, pos=[100, 27])
-            dpg.add_checkbox(label="Demo", tag="Action", callback=set_demo_action, pos=[100, 53])
-            dpg.add_checkbox(label="Python", tag="python", callback=set_python_action, pos=[100, 76])
-            dpg.add_checkbox(label="Enable", tag="Enable", callback=set_enable, pos=[100, 99])
+            dpg.add_checkbox(label="Enable", tag="Enable", callback=set_enable, pos=[100, 53])
+            dpg.add_checkbox(label="Demo", tag="Action", callback=set_demo_action, pos=[116, 76])
+            dpg.add_checkbox(label="Python", tag="python", callback=set_python_action, pos=[116, 99])
 
-            dpg.add_text("ESP32 ->", pos=[20, 40])
+            dpg.add_text("NoESP", pos=[20, 27])
+            dpg.add_checkbox(tag="Self", callback=set_self_mode, pos=[57, 27])
+
+            dpg.add_text("ESP32 ->", pos=[20, 60])
             dpg.add_text("ESP32 <-", pos=[20, 83])
 
-            dpg.add_checkbox(tag="ROS1pub", callback=ros1_pub, pos=[265, 40])
-            dpg.add_text("-> ROS1", pos=[210, 40])
-            dpg.add_checkbox(tag="ROS1sub", callback=ros1_sub, pos=[265, 83])
-            dpg.add_text("<- ROS1", pos=[210, 83])
-            dpg.add_checkbox(tag="Redis", callback=redis_sub, pos=[270, 104])
-            dpg.add_text("<- Redis", pos=[210, 104])
+            dpg.add_checkbox(tag="ROS1pub", callback=ros1_pub, pos=[283, 27])
+            dpg.add_text("-> ROS1", pos=[210, 27])
+            dpg.add_checkbox(tag="ROS1sub", callback=ros1_sub, pos=[283, 51])
+            dpg.add_text("<- ROS1", pos=[210, 51])
+            dpg.add_checkbox(tag="RedisPub", callback=redis_pub, pos=[283, 76])
+            dpg.add_text("-> Valkey ", pos=[210, 76])
+            dpg.add_checkbox(tag="Redis", callback=redis_sub, pos=[283, 99])
+            dpg.add_text("<- Valkey ", pos=[210, 99])
 
-            dpg.add_checkbox(tag="ros1_output_mode", callback=change_ros1_output_mode, user_data=1, pos=[305, 62])
-            dpg.add_text("targ/rcvd", pos=[236, 62])
 
             dpg.draw_rectangle(pmin=[80, -4], pmax=[190, 95], color=(
                 100, 100, 100, 255), thickness=1.0, fill=(0, 0, 0, 0))
@@ -2312,12 +2503,57 @@ def main():
                                  callback=set_transaction_mode, default_value="Flow", horizontal=True)
             dpg.add_button(label=" Next frame ", pos=[15, 175], callback=send_data_step_frame)  # 右下に設置
 
+# ------------------------------------------------------------------------
+# [ Connect ] : 接続設定ウィンドウ(右下)
+# ------------------------------------------------------------------------
+        with dpg.window(label="Valkey", width=248, height=162, pos=[600, 373]):
+            _vk_keys = _valkey_load_keys()
+            dpg.add_button(label="Start Valkey", width=95, pos=[10,  33], callback=valkey_start)
+            dpg.add_button(label="Reset",         width=50, pos=[110, 33], callback=valkey_reset)
+            dpg.add_button(label="Shutdown",      width=70, pos=[165, 33], callback=valkey_shutdown)
+            dpg.add_text("Publish",   pos=[10, 60])
+            dpg.add_combo(tag="connect_publish_combo", items=_vk_keys,
+                          default_value=_vk_keys[0] if _vk_keys else "",
+                          width=153, pos=[82, 57],
+                          callback=valkey_publish_changed)
+            # 起動時にredis_transferの書き込み先をドロップダウン初期値に同期
+            redis_transfer.redis_key = _vk_keys[0] if _vk_keys else REDIS_KEY_WRITE
+            dpg.add_input_text(tag="connect_key_input", hint="key name",
+                               width=145, pos=[10, 81])
+            dpg.add_button(label="Add", width=35, pos=[160, 81], callback=valkey_key_add)
+            dpg.add_button(label="Del", width=35, pos=[200, 81], callback=valkey_key_del)
+            dpg.add_text("Subscribe", pos=[10, 108])
+            _vk_sub_default = _vk_keys[1] if len(_vk_keys) > 1 else (_vk_keys[0] if _vk_keys else "")
+            dpg.add_combo(tag="connect_subscribe_combo", items=_vk_keys,
+                          default_value=_vk_sub_default,
+                          width=153, pos=[82, 105],
+                          callback=valkey_subscribe_changed)
+            # 起動時にredis_receiverの受信先をドロップダウン初期値に同期
+            redis_receiver.redis_key = _vk_sub_default
+            dpg.add_text("Valkey Server Off", tag="valkey_status_text",
+                         color=(128, 128, 128, 255), pos=[10, 132])
+            dpg.add_button(label="Disp Keys", width=90, pos=[145, 129], callback=valkey_disp_keys)
+
+# ------------------------------------------------------------------------
+# [ Valkey Keys Modal ] : キー一覧モーダル
+# ------------------------------------------------------------------------
+        with dpg.window(label="Valkey Keys", tag="valkey_keys_modal",
+                        modal=True, show=False, width=280, height=230,
+                        pos=[290, 185], no_resize=True):
+            with dpg.child_window(width=260, height=155, border=True):
+                dpg.add_text(tag="valkey_keys_text", default_value="")
+            dpg.add_button(label="Refresh", width=80, callback=valkey_keys_refresh)
+            dpg.add_same_line()
+            dpg.add_button(label="Close", width=80,
+                           callback=lambda: dpg.configure_item("valkey_keys_modal", show=False))
+
 # dpg描画処理2 =========================================================
         with dpg.value_registry():  # dpg変数値の登録
             dpg.add_int_value(tag="button_data")
 
         dpg.setup_dearpygui()
         dpg.show_viewport()
+        threading.Thread(target=_valkey_status_loop, daemon=True).start()
 
 # dpg描画内容のデータ更新 ================================================
         while dpg.is_dearpygui_running():
@@ -2343,30 +2579,6 @@ def main():
                         dpg.set_value("mpu"+str(i), _idsensor)
                     else:
                         dpg.set_value("mpu"+str(i), _idsensor*100)
-
-            # EEPROMデータをTrimウィンドウに反映 (メインスレッドでのみ実行)
-            if mrd.flag_eeprom_to_ui:
-                mrd.flag_eeprom_to_ui = False
-                for _ei in range(MRD_SERVO_SLOTS):
-                    _lk = f"L{_ei}"
-                    _rk = f"R{_ei}"
-                    if dpg.does_item_exist(f"Trim_{_lk}"):
-                        dpg.set_value(f"Trim_{_lk}", mrd.servo_l_trim_values_loaded[_ei])
-                    if dpg.does_item_exist(f"Trim_{_rk}"):
-                        dpg.set_value(f"Trim_{_rk}", mrd.servo_r_trim_values_loaded[_ei])
-                    if dpg.does_item_exist(f"Mount_{_lk}"):
-                        dpg.set_value(f"Mount_{_lk}", mrd.servo_mount[_lk])
-                    if dpg.does_item_exist(f"Mount_{_rk}"):
-                        dpg.set_value(f"Mount_{_rk}", mrd.servo_mount[_rk])
-                    if dpg.does_item_exist(f"Direction_{_lk}"):
-                        dpg.set_value(f"Direction_{_lk}", mrd.servo_direction[_lk])
-                    if dpg.does_item_exist(f"Direction_{_rk}"):
-                        dpg.set_value(f"Direction_{_rk}", mrd.servo_direction[_rk])
-                    if dpg.does_item_exist(f"ID_{_lk}"):
-                        dpg.set_value(f"ID_{_lk}", str(mrd.servo_id_values[_lk]))
-                    if dpg.does_item_exist(f"ID_{_rk}"):
-                        dpg.set_value(f"ID_{_rk}", str(mrd.servo_id_values[_rk]))
-                print("EEPROM data applied to Trim window.")
 
             # リモコンデータの表示更新
             pad_button_short = np.array([0], dtype=np.uint16)
@@ -2460,6 +2672,7 @@ def main():
 
             time.sleep(0.003)  # CPUの負荷を下げる
         dpg.destroy_context()
+        mrd.running = False  # ウィンドウ閉鎖時にmeridian_loopスレッドを停止
 
 
 # ================================================================================================================
@@ -2467,5 +2680,7 @@ def main():
 # ================================================================================================================
 if __name__ == '__main__':  # スレッド2つで送受信と画面描写を並列処理
     thread1 = threading.Thread(target=meridian_loop)  # サブスレッドでフラグ監視・通信処理・計算処理
+    thread1.daemon = True
     thread1.start()
     main()  # メインスレッドでdearpygui描写
+    thread1.join(timeout=2.0)
