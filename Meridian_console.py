@@ -106,6 +106,19 @@ import re
 import valkey as redis  # Valkey用ライブラリ (valkey.Valkey = redis.Redis 互換)
 import subprocess
 
+# Gamepad support via pygame (headless, no SDL window)
+os.environ.setdefault("SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS", "1")
+os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
+os.environ.setdefault("SDL_AUDIODRIVER", "dummy")
+try:
+    import pygame as _pygame
+    _pygame.display.init()
+    _pygame.joystick.init()
+    _pygame_available = True
+except Exception:
+    _pygame = None
+    _pygame_available = False
+
 # ROS搭載マシンの場合はrospyをインポートする
 try:
     import rospy
@@ -274,6 +287,10 @@ class MeridianConsole:
             MSG_SIZE, dtype=float)      # ROSサブスクライブ用
         self.pad_button_panel_short = np.array(
             [0], dtype=np.uint16)   # コンパネからのリモコン入力用
+        self.pad_gamepad_buttons = np.array([0], dtype=np.uint16)  # ゲームパッドのボタンビットマスク
+        self.pad_gamepad_axes = np.zeros(6, dtype=np.float64)      # LX,LY,RX,RY,L2,R2
+        self.pad_gamepad_player = -1   # -1=None, 0=Player1, ...
+        self.pad_gamepad_connected = False
         self.s_meridim_motion_f = np.zeros(
             MSG_SIZE, dtype=float)      # PC側で作成したサーボ位置送信用
         self.s_meridim_motion_keep_f = np.zeros(
@@ -1299,7 +1316,14 @@ def meridian_loop():
     import sys
     sys.setswitchinterval(0.001)  # GILスイッチ間隔を1msに短縮しGIL待ち時間を削減
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)  # UDP用のsocket設定
-    sock.bind(('', UDP_RECV_PORT))  # 全インターフェースで受信
+    try:
+        sock.bind(('', UDP_RECV_PORT))  # 全インターフェースで受信
+    except OSError as e:
+        if e.errno == 48:  # Address already in use
+            mrd.message1 = "Address already in use"
+            mrd.flag_self_mode = True  # DPGループが次フレームでチェックボックスに反映する
+        else:
+            raise
     sock.settimeout(0.1)  # Selfモード切替時にrecvfromのブロックを解除するためのタイムアウト
 
     _checksum = np.array([0], dtype=np.int16)
@@ -1598,14 +1622,25 @@ def meridian_loop():
                         # pad_button_tmp = mrd.pad_button_panel_short[0] & 0xFFFF  # uint16保証
                         # mrd.s_meridim[15] = np.int16(pad_button_tmp)  # int16に変換して格納
 
-                        pad_button_tmp = np.uint16(mrd.pad_button_panel_short[0])
+                        pad_button_tmp = np.uint16(
+                            mrd.pad_button_panel_short[0] | mrd.pad_gamepad_buttons[0])
                         mrd.s_meridim[15] = np.int16(pad_button_tmp)  # uint16→int16変換
 
-                        # pad_button_tmp = mrd.pad_button_panel_short[0]  # そのままuint16として使用
-                        # mrd.s_meridim[15] = np.int16(pad_button_tmp) if pad_button_tmp <= 32767 else np.int16(pad_button_tmp - 65536)
-                        mrd.s_meridim[16] = 0  # アナログ1
-                        mrd.s_meridim[17] = 0  # アナログ2
-                        mrd.s_meridim[18] = 0  # アナログ3
+                        if mrd.pad_gamepad_connected:
+                            axes = mrd.pad_gamepad_axes
+                            lx  = int(np.clip(axes[0] * 127, -127, 127))
+                            ly  = int(np.clip(axes[1] * 127, -127, 127))
+                            rx  = int(np.clip(axes[2] * 127, -127, 127))
+                            ry  = int(np.clip(axes[3] * 127, -127, 127))
+                            l2v = int(np.clip((axes[4] + 1.0) / 2.0 * 255, 0, 255))
+                            r2v = int(np.clip((axes[5] + 1.0) / 2.0 * 255, 0, 255))
+                            mrd.s_meridim[16] = struct.unpack('<h', bytes([ly & 0xFF, lx & 0xFF]))[0]
+                            mrd.s_meridim[17] = struct.unpack('<h', bytes([ry & 0xFF, rx & 0xFF]))[0]
+                            mrd.s_meridim[18] = struct.unpack('<h', bytes([l2v, r2v]))[0]
+                        else:
+                            mrd.s_meridim[16] = 0  # アナログ1
+                            mrd.s_meridim[17] = 0  # アナログ2
+                            mrd.s_meridim[18] = 0  # アナログ3
 
     # [ 5-6 ] : 送信マスターコマンドの作成
                         mrd.s_meridim[0] = MSG_SIZE  # デフォルト値を格納
@@ -1893,13 +1928,10 @@ def reset_counter():  # カウンターのリセット
 
 # [Button Input] ウィンドウ のリモコンボタン処理
 def pad_btn_panel_on(sender, app_data, user_data):
-    mrd.pad_button_panel_short
     if (mrd.pad_button_panel_short[0] & user_data) == 0:
         mrd.pad_button_panel_short[0] = mrd.pad_button_panel_short[0] | user_data
-        print(f'Btn:{mrd.pad_button_panel_short[0]}')
     else:
         mrd.pad_button_panel_short[0] = mrd.pad_button_panel_short[0] ^ user_data
-        print(f'Btn:{mrd.pad_button_panel_short[0]}')
 
 
 # [sensor monitor] ウィンドウのSetYawボタン処理
@@ -2290,6 +2322,22 @@ def valkey_disp_keys():
     dpg.configure_item("valkey_keys_modal", show=True)
 
 
+def _valkey_close_disp_keys():
+    """Disp Keys モーダルを閉じ、取得済みキーを Subscribe ドロップダウンに反映。"""
+    text = dpg.get_value("valkey_keys_text")
+    keys = [k.strip() for k in text.splitlines()
+            if k.strip() and not k.startswith("(") and not k.startswith("Not")]
+    if keys:
+        current = dpg.get_value("connect_subscribe_combo")
+        dpg.configure_item("connect_subscribe_combo", items=keys)
+        if current in keys:
+            dpg.set_value("connect_subscribe_combo", current)
+        else:
+            dpg.set_value("connect_subscribe_combo", keys[0])
+            redis_receiver.redis_key = keys[0]
+    dpg.configure_item("valkey_keys_modal", show=False)
+
+
 # ---------- Valkey server status indicator ----------
 
 def _valkey_check_online():
@@ -2321,6 +2369,125 @@ def _valkey_status_loop():
     while mrd.running:
         _valkey_update_status()
         time.sleep(1.0)
+
+
+# ================================================================================================================
+# ---- ゲームパッド処理 --------------------------------------------------------------------------------------------
+# ================================================================================================================
+
+# SDL2/pygame button index → Meridim uint16 bitmask (PS4 on macOS)
+_PYGAME_BTN_TO_MERIDIM = {
+    0:  16384,  # Cross(X)     → R_DOWN
+    1:  8192,   # Circle(O)    → R_RIGHT
+    2:  32768,  # Square(Sq)   → R_LEFT
+    3:  4096,   # Triangle(Tri)→ R_UP
+    4:  1,      # Share        → SELECT
+    6:  8,      # Options      → START
+    7:  2,      # L3           → bit1
+    8:  4,      # R3           → bit2
+    9:  1024,   # L1           → L1
+    10: 2048,   # R1           → R1
+    11: 16,     # Up  (D-pad as button)
+    12: 64,     # Down
+    13: 128,    # Left
+    14: 32,     # Right
+}
+
+_gamepad_joysticks: dict = {}  # {index: pygame.joystick.Joystick}
+
+
+def pad_player_changed(sender, app_data, user_data):
+    """プレイヤー選択プルダウンのコールバック。"""
+    items = ["None", "Player 1", "Player 2", "Player 3", "Player 4", "Player 5", "Player 6"]
+    try:
+        idx = items.index(app_data) - 1  # "None"=-1, "Player 1"=0, ...
+    except ValueError:
+        idx = -1
+    mrd.pad_gamepad_player = idx
+    if idx < 0:
+        mrd.pad_gamepad_buttons[0] = 0
+        mrd.pad_gamepad_axes[:] = 0.0
+        mrd.pad_gamepad_connected = False
+
+
+def _gamepad_poll_loop():
+    """ゲームパッドの状態を100Hzでポーリングするバックグラウンドスレッド。"""
+    global _gamepad_joysticks
+    while mrd.running:
+        if not _pygame_available:
+            time.sleep(0.5)
+            continue
+        try:
+            _pygame.event.pump()
+            count = _pygame.joystick.get_count()
+
+            # 接続/切断に合わせてJoystickオブジェクトを管理
+            for i in range(count):
+                if i not in _gamepad_joysticks:
+                    joy = _pygame.joystick.Joystick(i)
+                    joy.init()
+                    _gamepad_joysticks[i] = joy
+            for i in list(_gamepad_joysticks.keys()):
+                if i >= count:
+                    try:
+                        _gamepad_joysticks[i].quit()
+                    except Exception:
+                        pass
+                    del _gamepad_joysticks[i]
+
+            player = mrd.pad_gamepad_player
+            if player < 0 or player not in _gamepad_joysticks:
+                mrd.pad_gamepad_buttons[0] = 0
+                mrd.pad_gamepad_axes[:] = 0.0
+                mrd.pad_gamepad_connected = False
+                time.sleep(0.02)
+                continue
+
+            joy = _gamepad_joysticks[player]
+
+            # ボタン → Meridimビットマスク変換
+            bitmask = np.uint16(0)
+            n_buttons = joy.get_numbuttons()
+            for btn_idx, meridim_bit in _PYGAME_BTN_TO_MERIDIM.items():
+                if btn_idx < n_buttons and joy.get_button(btn_idx):
+                    bitmask = np.uint16(bitmask | np.uint16(meridim_bit))
+
+            # ハット(D-pad) → ビットマスク
+            if joy.get_numhats() > 0:
+                hx, hy = joy.get_hat(0)
+                if hx == -1: bitmask = np.uint16(bitmask | np.uint16(128))  # L_LEFT
+                if hx ==  1: bitmask = np.uint16(bitmask | np.uint16(32))   # L_RIGHT
+                if hy ==  1: bitmask = np.uint16(bitmask | np.uint16(16))   # L_UP
+                if hy == -1: bitmask = np.uint16(bitmask | np.uint16(64))   # L_DOWN
+
+            # アナログ軸
+            n_axes = joy.get_numaxes()
+            axes = np.zeros(6, dtype=np.float64)
+            if n_axes > 0: axes[0] = joy.get_axis(0)   # LX
+            if n_axes > 1: axes[1] = joy.get_axis(1)   # LY
+            if n_axes > 2: axes[2] = joy.get_axis(2)   # RX
+            if n_axes > 3: axes[3] = joy.get_axis(3)   # RY
+            if n_axes > 4:
+                l2 = joy.get_axis(4)  # -1.0(off) to 1.0(full)
+                axes[4] = l2
+                if l2 > 0.0:
+                    bitmask = np.uint16(bitmask | np.uint16(256))  # L2 digital
+            if n_axes > 5:
+                r2 = joy.get_axis(5)
+                axes[5] = r2
+                if r2 > 0.0:
+                    bitmask = np.uint16(bitmask | np.uint16(512))  # R2 digital
+
+            mrd.pad_gamepad_buttons[0] = bitmask
+            mrd.pad_gamepad_axes[:] = axes
+            mrd.pad_gamepad_connected = True
+
+        except Exception:
+            mrd.pad_gamepad_buttons[0] = 0
+            mrd.pad_gamepad_axes[:] = 0.0
+            mrd.pad_gamepad_connected = False
+
+        time.sleep(0.01)  # 100Hz
 
 
 # ================================================================================================================
@@ -2455,6 +2622,13 @@ def main():
 # [ Button Input ] : リモコン入力コンパネ用ウィンドウ(表示位置:上段/右側)
 # ------------------------------------------------------------------------
         with dpg.window(label="Button Input", width=248, height=155, pos=[600, 5]):
+            dpg.add_text("Pad Not connected", tag="pad_status_text",
+                         color=(128, 128, 128, 255), pos=[62, 20])
+            dpg.add_combo(tag="pad_player_combo",
+                          items=["None", "Player 1", "Player 2", "Player 3",
+                                 "Player 4", "Player 5", "Player 6"],
+                          default_value="None",
+                          width=130, pos=[59, 43], callback=pad_player_changed)
             dpg.add_checkbox(tag="Btn_L2",      callback=pad_btn_panel_on, user_data=256, pos=[15, 38])
             dpg.add_checkbox(tag="Btn_L1",      callback=pad_btn_panel_on, user_data=1024, pos=[15, 60])
             dpg.add_checkbox(tag="Btn_L_UP",    callback=pad_btn_panel_on, user_data=16, pos=[42, 80])
@@ -2544,8 +2718,7 @@ def main():
                 dpg.add_text(tag="valkey_keys_text", default_value="")
             dpg.add_button(label="Refresh", width=80, callback=valkey_keys_refresh)
             dpg.add_same_line()
-            dpg.add_button(label="Close", width=80,
-                           callback=lambda: dpg.configure_item("valkey_keys_modal", show=False))
+            dpg.add_button(label="Close", width=80, callback=_valkey_close_disp_keys)
 
 # dpg描画処理2 =========================================================
         with dpg.value_registry():  # dpg変数値の登録
@@ -2554,6 +2727,7 @@ def main():
         dpg.setup_dearpygui()
         dpg.show_viewport()
         threading.Thread(target=_valkey_status_loop, daemon=True).start()
+        threading.Thread(target=_gamepad_poll_loop, daemon=True).start()
 
 # dpg描画内容のデータ更新 ================================================
         while dpg.is_dearpygui_running():
@@ -2565,6 +2739,9 @@ def main():
             dpg.set_value("DispMessage2", mrd.message2)
             dpg.set_value("DispMessage3", mrd.message3)
             dpg.set_value("DispMessage4", mrd.message4)
+            # flag_self_mode の変化をチェックボックスに反映
+            if dpg.get_value("Self") != mrd.flag_self_mode:
+                dpg.set_value("Self", mrd.flag_self_mode)
 
             # サーボデータとIMUデータの表示更新
             for i in range(0, 15, 1):
@@ -2580,27 +2757,45 @@ def main():
                     else:
                         dpg.set_value("mpu"+str(i), _idsensor*100)
 
+            # ゲームパッド接続状態テキストの更新
+            if mrd.pad_gamepad_connected:
+                dpg.set_value("pad_status_text", "Pad Connected.")
+                dpg.configure_item("pad_status_text", color=(100, 200, 255, 255))
+            else:
+                dpg.set_value("pad_status_text", "Pad Not connected")
+                dpg.configure_item("pad_status_text", color=(128, 128, 128, 255))
+
             # リモコンデータの表示更新
             pad_button_short = np.array([0], dtype=np.uint16)
             received_button = int(mrd.r_meridim[15]) & 0xFFFF  # int16→uint16変換
-            # uint16同士でOR演算
-            pad_button_short[0] = received_button | mrd.pad_button_panel_short[0]
+            pad_button_short[0] = (received_button
+                                   | mrd.pad_button_panel_short[0]
+                                   | mrd.pad_gamepad_buttons[0])
 
-            # 表示用（自動的にint32）
             dpg.set_value("pad_button", str(pad_button_short[0]))
-            dpg.set_value("pad_Lx", int(mrd.r_meridim_char[33]))
-            dpg.set_value("pad_Ly", int(mrd.r_meridim_char[32]))
-            dpg.set_value("pad_Rx", int(mrd.r_meridim_char[35]))
-            dpg.set_value("pad_Ry", int(mrd.r_meridim_char[34]))
 
-            _padL2val_bin = struct.pack('b', mrd.r_meridim_char[36])
-            _padL2val = struct.unpack('B', _padL2val_bin)[0]
-            _padR2val_bin = struct.pack('b', mrd.r_meridim_char[37])
-            _padR2val = struct.unpack('B', _padR2val_bin)[0]
+            if mrd.pad_gamepad_connected:
+                # ゲームパッドの軸値を直接表示
+                axes = mrd.pad_gamepad_axes
+                dpg.set_value("pad_Lx", int(np.clip(axes[0] * 127, -127, 127)))
+                dpg.set_value("pad_Ly", int(np.clip(axes[1] * 127, -127, 127)))
+                dpg.set_value("pad_Rx", int(np.clip(axes[2] * 127, -127, 127)))
+                dpg.set_value("pad_Ry", int(np.clip(axes[3] * 127, -127, 127)))
+                dpg.set_value("pad_L2v", int(np.clip((axes[4] + 1.0) / 2.0 * 255, 0, 255)))
+                dpg.set_value("pad_R2v", int(np.clip((axes[5] + 1.0) / 2.0 * 255, 0, 255)))
+            else:
+                dpg.set_value("pad_Lx", int(mrd.r_meridim_char[33]))
+                dpg.set_value("pad_Ly", int(mrd.r_meridim_char[32]))
+                dpg.set_value("pad_Rx", int(mrd.r_meridim_char[35]))
+                dpg.set_value("pad_Ry", int(mrd.r_meridim_char[34]))
+                _padL2val_bin = struct.pack('b', mrd.r_meridim_char[36])
+                _padL2val = struct.unpack('B', _padL2val_bin)[0]
+                _padR2val_bin = struct.pack('b', mrd.r_meridim_char[37])
+                _padR2val = struct.unpack('B', _padR2val_bin)[0]
+                dpg.set_value("pad_L2v", int(_padL2val))
+                dpg.set_value("pad_R2v", int(_padR2val))
 
-            dpg.set_value("pad_L2v", int(_padL2val))
-            dpg.set_value("pad_R2v", int(_padR2val))
-            dpg.set_value("button_data", int(mrd.r_meridim[15]))
+            dpg.set_value("button_data", int(np.int16(pad_button_short[0])))
 
 # ROS1 joint_statesのパブリッシュ =======================================
             global rospy_imported
