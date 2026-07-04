@@ -105,6 +105,7 @@ import os
 import re
 import valkey as redis  # Valkey用ライブラリ (valkey.Valkey = redis.Redis 互換)
 import subprocess
+import errno as _errno
 
 # Gamepad support via pygame (headless, no SDL window)
 os.environ.setdefault("SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS", "1")
@@ -132,9 +133,11 @@ except ImportError:
 sys.stdout.reconfigure(encoding='utf-8')
 
 # 定数
-TITLE_VERSION = "Meridian_Console_v26.0702" # DPGのウィンドウタイトル兼バージョン表示
-UDP_RECV_PORT = 22222                       # 受信ポート
-UDP_SEND_PORT = 22224                       # 送信ポート
+TITLE_VERSION = "Meridian_Console_v26.0703" # DPGのウィンドウタイトル兼バージョン表示
+UDP_RECV_PORT = 22222                       # 受信ポート (Main)
+UDP_SEND_PORT = 22224                       # 送信ポート (ESP32の受信ポート)
+UDP_SUB_PORT_STEP = 10                      # サブコンソールのポートオフセット (22232, 22242, ...)
+UDP_SUB_PORT_MAX = 5                        # 最大サブコンソール数
 MSG_SIZE = 90                               # Meridim配列の長さ(デフォルトは90)
 MSG_BUFF = MSG_SIZE * 2                     # Meridim配列のバイト長さ
 MSG_ERRS = MSG_SIZE - 2                     # Meridim配列のエラーフラグの格納場所(配列の最後から２番目)
@@ -421,6 +424,9 @@ class MeridianConsole:
         # ロックの追加
         self.lock = threading.Lock()
 
+        # サブコンソールモードフラグ (UDP受信ポートが使用中の場合にTrueになる)
+        self.is_sub_mode = False
+
 
 def get_local_ip():  # 自身のIPアドレスを自動取得する
     try:
@@ -431,6 +437,207 @@ def get_local_ip():  # 自身のIPアドレスを自動取得する
         return IP
     except Exception as e:
         return "Error: " + str(e)
+
+
+def _load_board_ip_config(filepath):
+    """board_ip.txtの全キー・バリューをdictで返す。"""
+    config = {}
+    if os.path.exists(filepath):
+        with open(filepath, 'r') as f:
+            for line in f:
+                m = re.match(r'([A-Z0-9_]+)\s*=\s*"?([^"#\n]*)"?', line.strip())
+                if m:
+                    config[m.group(1)] = m.group(2).strip()
+    return config
+
+
+def _save_board_ip_config(updates, filepath):
+    """board_ip.txtのupdatesのキーを更新/追加して保存する。他のキーは保持。"""
+    lines = []
+    updated_keys = set()
+    if os.path.exists(filepath):
+        with open(filepath, 'r') as f:
+            for line in f:
+                m = re.match(r'([A-Z0-9_]+)\s*=', line.strip())
+                if m and m.group(1) in updates:
+                    key = m.group(1)
+                    val = updates[key]
+                    if '"' in line:
+                        lines.append(f'{key}="{val}"\n')
+                    else:
+                        lines.append(f'{key} = {val}\n')
+                    updated_keys.add(key)
+                else:
+                    lines.append(line if line.endswith('\n') else line + '\n')
+    for key, val in updates.items():
+        if key not in updated_keys:
+            if re.match(r'^\d+$', str(val)):
+                lines.append(f'{key} = {val}\n')
+            else:
+                lines.append(f'{key}="{val}"\n')
+    with open(filepath, 'w') as f:
+        f.writelines(lines)
+
+
+def select_console_mode():
+    """起動時にメインかサブかを選択する。
+    Returns: 0=Main, 1=Sub#1, 2=Sub#2, ...
+    """
+    print("=" * 52)
+    print("  Meridian Console Startup")
+    print(f"  [Enter / y / 0 = Main]  [1..{UDP_SUB_PORT_MAX} = Sub]")
+    print("=" * 52)
+    while True:
+        val = input("Start as Main or Sub? > ").strip().lower()
+        if val in ('', 'y', 'yes', '0', 'main'):
+            print("Starting as Main console.\n")
+            return 0
+        try:
+            n = int(val)
+            if 1 <= n <= UDP_SUB_PORT_MAX:
+                print(f"Starting as Sub console #{n}.\n")
+                return n
+            print(f"Please enter 0 (Main) or 1-{UDP_SUB_PORT_MAX} (Sub).")
+        except ValueError:
+            print(f"Please enter 0 (Main) or 1-{UDP_SUB_PORT_MAX} (Sub).")
+
+
+def select_sub_network_and_port(sub_num, filename="board_ip.txt"):
+    """サブコンソール用ネットワーク設定とUDP送受信ポートをヒアリングして保存する。
+    Returns: (send_ip, recv_ip, network_mode, recv_port, send_port)
+    """
+    prefix = f"SUB{sub_num}_"
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    filepath = os.path.join(script_dir, filename)
+
+    config = _load_board_ip_config(filepath)
+
+    hard_default = {
+        0: {'SEND': '192.168.3.45', 'RECV': '192.168.3.3'},
+        1: {'SEND': '192.168.3.45', 'RECV': '192.168.3.3'},
+        2: {'SEND': '192.168.90.1', 'RECV': '192.168.90.2'},
+    }
+    mode_labels = {0: 'WIFI(DHCP)', 1: 'WIFI(Fixed)', 2: 'Wired LAN'}
+
+    try:
+        network_mode = int(config.get(f'{prefix}NETWORK_MODE', '0'))
+    except Exception:
+        network_mode = 0
+
+    ip_table = {
+        0: {
+            'SEND': config.get(f'{prefix}UDP_WIFI_DHCP_SEND_IP_DEF', hard_default[0]['SEND']),
+            'RECV': config.get(f'{prefix}UDP_WIFI_DHCP_RECV_IP_DEF', hard_default[0]['RECV']),
+        },
+        1: {
+            'SEND': config.get(f'{prefix}UDP_WIFI_FIXED_SEND_IP_DEF', hard_default[1]['SEND']),
+            'RECV': config.get(f'{prefix}UDP_WIFI_FIXED_RECV_IP_DEF', hard_default[1]['RECV']),
+        },
+        2: {
+            'SEND': config.get(f'{prefix}UDP_WIRED_SEND_IP_DEF', hard_default[2]['SEND']),
+            'RECV': config.get(f'{prefix}UDP_WIRED_RECV_IP_DEF', hard_default[2]['RECV']),
+        },
+    }
+
+    default_recv_port = UDP_RECV_PORT + UDP_SUB_PORT_STEP * sub_num
+    try:
+        recv_port = int(config.get(f'{prefix}UDP_RECV_PORT', str(default_recv_port)))
+    except Exception:
+        recv_port = default_recv_port
+
+    try:
+        send_port = int(config.get(f'{prefix}UDP_SEND_PORT', str(recv_port + 2)))
+    except Exception:
+        send_port = recv_port + 2
+
+    print(f"--- Sub Console #{sub_num} Network Settings ---")
+    ip_changed = False
+    while True:
+        print(f"Use previous {mode_labels[network_mode]} settings?")
+        print(f"SEND_IP: {ip_table[network_mode]['SEND']}, RECV_IP: {ip_table[network_mode]['RECV']}")
+        yn = input("y/n (Enter for y): ").strip().lower()
+        if yn in ('', 'y', 'yes'):
+            break
+        elif yn in ('n', 'no'):
+            ip_changed = True
+            while True:
+                print("Please select a mode. \n0:WIFI(DHCP), 1:WIFI(Fixed), 2:Wired LAN")
+                mode_in = input(f"Enter mode number (current: {network_mode}): ").strip()
+                if mode_in == '':
+                    break
+                try:
+                    m_in = int(mode_in)
+                    if m_in in [0, 1, 2]:
+                        network_mode = m_in
+                        break
+                except Exception:
+                    pass
+                print("Please enter 0, 1, or 2.")
+            for key in ['SEND', 'RECV']:
+                label = (f"Enter the {key} IP for {mode_labels[network_mode]}"
+                         f" (current: {ip_table[network_mode][key]}): ")
+                while True:
+                    ip_in = input(label).strip()
+                    if ip_in == '':
+                        break
+                    if check_valid_ip(ip_in):
+                        ip_table[network_mode][key] = ip_in
+                        break
+                    print("Invalid IP address format. Example: 192.168.1.100")
+            break
+        else:
+            print("Please answer with y or n.")
+
+    port_changed = False
+    while True:
+        port_in = input(
+            f"UDP recv port for Sub#{sub_num} (current: {recv_port}, Enter to keep): ").strip()
+        if port_in == '':
+            break
+        try:
+            p = int(port_in)
+            if 1024 <= p <= 65535:
+                if p != recv_port:
+                    recv_port = p
+                    send_port = recv_port + 2  # 受信ポート変更時に送信ポートのデフォルトも追従
+                    port_changed = True
+                break
+            print("Port must be between 1024 and 65535.")
+        except ValueError:
+            print("Please enter a valid port number.")
+
+    send_port_changed = False
+    while True:
+        sport_in = input(
+            f"UDP send port for Sub#{sub_num} (current: {send_port}, Enter to keep): ").strip()
+        if sport_in == '':
+            break
+        try:
+            sp = int(sport_in)
+            if 1024 <= sp <= 65535:
+                if sp != send_port:
+                    send_port = sp
+                    send_port_changed = True
+                break
+            print("Port must be between 1024 and 65535.")
+        except ValueError:
+            print("Please enter a valid port number.")
+
+    if ip_changed or port_changed or send_port_changed:
+        _save_board_ip_config({
+            f'{prefix}NETWORK_MODE': str(network_mode),
+            f'{prefix}UDP_WIFI_DHCP_SEND_IP_DEF': ip_table[0]['SEND'],
+            f'{prefix}UDP_WIFI_DHCP_RECV_IP_DEF': ip_table[0]['RECV'],
+            f'{prefix}UDP_WIFI_FIXED_SEND_IP_DEF': ip_table[1]['SEND'],
+            f'{prefix}UDP_WIFI_FIXED_RECV_IP_DEF': ip_table[1]['RECV'],
+            f'{prefix}UDP_WIRED_SEND_IP_DEF': ip_table[2]['SEND'],
+            f'{prefix}UDP_WIRED_RECV_IP_DEF': ip_table[2]['RECV'],
+            f'{prefix}UDP_RECV_PORT': str(recv_port),
+            f'{prefix}UDP_SEND_PORT': str(send_port),
+        }, filepath)
+        print("Settings saved.\n")
+    return (ip_table[network_mode]['SEND'], ip_table[network_mode]['RECV'],
+            network_mode, recv_port, send_port)
 
 
 def check_valid_ip(ip):  # IPアドレスの書式確認
@@ -520,20 +727,15 @@ def select_network_mode_and_ip(filename="board_ip.txt"):
                 config['UDP_WIRED_SEND_IP_DEF'] = ip_table[2]['SEND']
                 config['UDP_WIRED_RECV_IP_DEF'] = ip_table[2]['RECV']
             config['NETWORK_MODE'] = str(network_mode)
-            with open(filepath, 'w') as f:
-                f.write(
-                    f'UDP_WIFI_DHCP_SEND_IP_DEF="{config.get("UDP_WIFI_DHCP_SEND_IP_DEF", default[0]["SEND"])}"\n')
-                f.write(
-                    f'UDP_WIFI_DHCP_RECV_IP_DEF="{config.get("UDP_WIFI_DHCP_RECV_IP_DEF", default[0]["RECV"])}"\n')
-                f.write(
-                    f'UDP_WIFI_FIXED_SEND_IP_DEF="{config.get("UDP_WIFI_FIXED_SEND_IP_DEF", default[1]["SEND"])}"\n')
-                f.write(
-                    f'UDP_WIFI_FIXED_RECV_IP_DEF="{config.get("UDP_WIFI_FIXED_RECV_IP_DEF", default[1]["RECV"])}"\n')
-                f.write(
-                    f'UDP_WIRED_SEND_IP_DEF="{config.get("UDP_WIRED_SEND_IP_DEF", default[2]["SEND"])}"\n')
-                f.write(
-                    f'UDP_WIRED_RECV_IP_DEF="{config.get("UDP_WIRED_RECV_IP_DEF", default[2]["RECV"])}"\n')
-                f.write(f'NETWORK_MODE = {network_mode}\n')
+            _save_board_ip_config({
+                'UDP_WIFI_DHCP_SEND_IP_DEF': ip_table[0]['SEND'],
+                'UDP_WIFI_DHCP_RECV_IP_DEF': ip_table[0]['RECV'],
+                'UDP_WIFI_FIXED_SEND_IP_DEF': ip_table[1]['SEND'],
+                'UDP_WIFI_FIXED_RECV_IP_DEF': ip_table[1]['RECV'],
+                'UDP_WIRED_SEND_IP_DEF': ip_table[2]['SEND'],
+                'UDP_WIRED_RECV_IP_DEF': ip_table[2]['RECV'],
+                'NETWORK_MODE': str(network_mode),
+            }, filepath)
             print("Settings saved.\n")
             break  # 設定保存後は即ループを抜けてサービス開始
         else:
@@ -1272,7 +1474,12 @@ def create_trim_window():
         set_trim_area_enabled(False)
 
 
-UDP_SEND_IP_DEF, UDP_RECV_IP_DEF, NETWORK_MODE = select_network_mode_and_ip()
+_console_sub_num = select_console_mode()
+if _console_sub_num == 0:
+    UDP_SEND_IP_DEF, UDP_RECV_IP_DEF, NETWORK_MODE = select_network_mode_and_ip()
+else:
+    UDP_SEND_IP_DEF, UDP_RECV_IP_DEF, NETWORK_MODE, UDP_RECV_PORT, UDP_SEND_PORT = \
+        select_sub_network_and_port(_console_sub_num)
 UDP_SEND_IP = UDP_SEND_IP_DEF
 
 # ================================================================================================================
@@ -1283,6 +1490,9 @@ UDP_SEND_IP = UDP_SEND_IP_DEF
 # [ 0 ]  初期設定
 # ------------------------------------------------------------------------
 mrd = MeridianConsole()  # Meridianデータのインスタンス
+if _console_sub_num > 0:
+    mrd.is_sub_mode = True
+    mrd.pad_gamepad_player = _console_sub_num  # サブ#N → joystickインデックスN (Player N+1)
 redis_receiver = RedisReceiver(host=REDIS_HOST, port=REDIS_PORT, redis_key=REDIS_KEY_READ)
 redis_transfer = RedisTransfer(host=REDIS_HOST, port=REDIS_PORT, redis_key=REDIS_KEY_WRITE)
 
@@ -1315,13 +1525,23 @@ def send_redis_data():
 def meridian_loop():
     import sys
     sys.setswitchinterval(0.001)  # GILスイッチ間隔を1msに短縮しGIL待ち時間を削減
+    # サブモードで自前ESP32を持つ場合: メインからの127.0.0.1リレーを無視する
+    _sub_has_own_esp32 = mrd.is_sub_mode and UDP_SEND_IP not in ('', '127.0.0.1', 'localhost')
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)  # UDP用のsocket設定
     try:
         sock.bind(('', UDP_RECV_PORT))  # 全インターフェースで受信
+        if mrd.is_sub_mode:
+            if _sub_has_own_esp32:
+                print(f"[SUB] Bound to UDP recv port {UDP_RECV_PORT} "
+                      f"(own ESP32 at {UDP_SEND_IP}, relay from main ignored)")
+            else:
+                print(f"[SUB] Bound to UDP recv port {UDP_RECV_PORT} "
+                      f"(relay from main on port {UDP_RECV_PORT - UDP_SUB_PORT_STEP})")
     except OSError as e:
-        if e.errno == 48:  # Address already in use
-            mrd.message1 = "Address already in use"
-            mrd.flag_self_mode = True  # DPGループが次フレームでチェックボックスに反映する
+        if e.errno == _errno.EADDRINUSE:
+            mrd.flag_self_mode = True
+            mrd.message1 = f"[WARN] Port {UDP_RECV_PORT} already in use. Running in self-loop mode."
+            print(f"[WARN] UDP port {UDP_RECV_PORT} in use. Running in self-loop mode.")
         else:
             raise
     sock.settimeout(0.1)  # Selfモード切替時にrecvfromのブロックを解除するためのタイムアウト
@@ -1334,7 +1554,13 @@ def meridian_loop():
         # 180個の要素を持つint8型のNumPy配列を作成
         _r_bin_data_past = np.zeros(180, dtype=np.int8)
         _r_bin_data = np.zeros(180, dtype=np.int8)
-        mrd.message1 = "Waiting for UDP data from "+UDP_SEND_IP+"..."
+        if mrd.is_sub_mode:
+            if _sub_has_own_esp32:
+                mrd.message1 = f"SUB mode: Waiting for ESP32 ({UDP_SEND_IP}) on port {UDP_RECV_PORT}..."
+            else:
+                mrd.message1 = f"SUB mode: Waiting for relay on port {UDP_RECV_PORT}..."
+        else:
+            mrd.message1 = "Waiting for UDP data from "+UDP_SEND_IP+"..."
 
         with closing(sock):
             _prev_self_mode = False  # Self→UDP切り替え検出用
@@ -1368,9 +1594,13 @@ def meridian_loop():
 # [ 1-1 ] : UDPデータの受信を待つループ
                     try:
                         _r_bin_data_past = _r_bin_data
-                        _r_bin_data, addr = sock.recvfrom(MSG_BUFF)  # UDPに受信したデータを転記
-                        while np.array_equal(_r_bin_data_past, _r_bin_data):  # 前回受信データと差分があったら進む
-                            _r_bin_data, addr = sock.recvfrom(MSG_BUFF)
+                        while True:
+                            _r_bin_data, addr = sock.recvfrom(MSG_BUFF)  # UDPに受信したデータを転記
+                            # サブモード自前ESP32: メインリレー(127.0.0.1)パケットを無視して200Hz化を防ぐ
+                            if _sub_has_own_esp32 and addr[0] == '127.0.0.1':
+                                continue
+                            if not np.array_equal(_r_bin_data_past, _r_bin_data):  # 前回と差分があったら進む
+                                break
                     except socket.timeout:
                         continue  # タイムアウト時はループ先頭に戻りflag_self_modeを再チェック
 
@@ -1381,6 +1611,15 @@ def meridian_loop():
                         '90H', _r_bin_data)  # unsignedshort型
                     mrd.r_meridim_char = struct.unpack('180b', _r_bin_data)
                     mrd.message1 = "UDP data receiving from "+UDP_SEND_IP  # 受信中のメッセージ表示
+
+# [ 1-2-Relay ] : サブコンソールへUDPデータを中継
+                    for _ri in range(1, UDP_SUB_PORT_MAX + 1):
+                        try:
+                            sock.sendto(_r_bin_data,
+                                        ('127.0.0.1',
+                                         UDP_RECV_PORT + UDP_SUB_PORT_STEP * _ri))
+                        except Exception:
+                            pass
 
 # [ 1-3 ] : 送信UDPデータのターミナル表示
                 if mrd.flag_disp_send:
@@ -2624,10 +2863,12 @@ def main():
         with dpg.window(label="Button Input", width=248, height=155, pos=[600, 5]):
             dpg.add_text("Pad Not connected", tag="pad_status_text",
                          color=(128, 128, 128, 255), pos=[62, 20])
+            _pad_default = (f"Player {_console_sub_num + 1}"
+                            if _console_sub_num > 0 else "None")
             dpg.add_combo(tag="pad_player_combo",
                           items=["None", "Player 1", "Player 2", "Player 3",
                                  "Player 4", "Player 5", "Player 6"],
-                          default_value="None",
+                          default_value=_pad_default,
                           width=130, pos=[59, 43], callback=pad_player_changed)
             dpg.add_checkbox(tag="Btn_L2",      callback=pad_btn_panel_on, user_data=256, pos=[15, 38])
             dpg.add_checkbox(tag="Btn_L1",      callback=pad_btn_panel_on, user_data=1024, pos=[15, 60])
@@ -2730,8 +2971,14 @@ def main():
         threading.Thread(target=_gamepad_poll_loop, daemon=True).start()
 
 # dpg描画内容のデータ更新 ================================================
+        _sub_title_applied = False
         while dpg.is_dearpygui_running():
             signal.signal(signal.SIGINT, signal.SIG_DFL)
+
+            # サブモード検出時にタイトルを1回だけ更新
+            if mrd.is_sub_mode and not _sub_title_applied:
+                dpg.set_viewport_title(TITLE_VERSION + f" [SUB{_console_sub_num}]")
+                _sub_title_applied = True
 
             # メッセージ欄の表示更新
             dpg.set_value("DispMessage0", mrd.message0)
