@@ -2990,19 +2990,20 @@ def main():
             if dpg.get_value("Self") != mrd.flag_self_mode:
                 dpg.set_value("Self", mrd.flag_self_mode)
 
-            # サーボデータとIMUデータの表示更新
+            # サーボデータの表示更新
             for i in range(0, 15, 1):
                 _idld = mrd.d_meridim[MRD_L_ORIG_IDX + 1 + i * 2]
                 _idrd = mrd.d_meridim[MRD_R_ORIG_IDX + 1 + i * 2]
-                _idsensor = mrd.r_meridim[i+2]/10000
                 dpg.set_value("ID L"+str(i), _idld/100)  # サーボIDと数値の表示
                 dpg.set_value("ID R"+str(i), _idrd/100)
 
-                if i < 13:  # IMUデータの更新
-                    if i < 11:
-                        dpg.set_value("mpu"+str(i), _idsensor)
-                    else:
-                        dpg.set_value("mpu"+str(i), _idsensor*100)
+            # IMUデータの表示更新 (mpu0..9: 生値÷10000, mpu10..12: rol/pit/yaw = ÷100)
+            for i in range(0, 13, 1):
+                _idsensor = mrd.r_meridim[i + 2] / 10000
+                if i < 10:  # ac_x〜temp: ×100なし
+                    dpg.set_value("mpu"+str(i), _idsensor)
+                else:        # rol/pit/yaw: ×100で角度に変換
+                    dpg.set_value("mpu"+str(i), _idsensor * 100)
 
             # ゲームパッド接続状態テキストの更新
             if mrd.pad_gamepad_connected:
