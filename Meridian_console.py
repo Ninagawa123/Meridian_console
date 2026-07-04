@@ -2348,7 +2348,7 @@ def main():
                 dpg.set_value("ID R"+str(i), _idrd/100)
 
                 if i < 13:  # IMUデータの更新
-                    if i < 11:
+                    if i < 10:
                         dpg.set_value("mpu"+str(i), _idsensor)
                     else:
                         dpg.set_value("mpu"+str(i), _idsensor*100)
