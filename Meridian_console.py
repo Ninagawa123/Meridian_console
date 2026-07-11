@@ -103,14 +103,20 @@ import time
 import atexit
 import os
 import re
-import valkey as redis  # Valkey用ライブラリ (valkey.Valkey = redis.Redis 互換)
+import shutil
+import valkey  # Valkey用ライブラリ
 import subprocess
+import queue
+import importlib.util
 import errno as _errno
 
 # Gamepad support via pygame (headless, no SDL window)
+os.environ.setdefault("PYGAME_HIDE_SUPPORT_PROMPT", "hide")  # バナー非表示
 os.environ.setdefault("SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS", "1")
 os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
 os.environ.setdefault("SDL_AUDIODRIVER", "dummy")
+import warnings as _warnings
+_warnings.filterwarnings("ignore", category=UserWarning, module="pygame")
 try:
     import pygame as _pygame
     _pygame.display.init()
@@ -149,10 +155,10 @@ MRD_R_ORIG_IDX = 50                         # Meridim配列のR系統の最初�
 MRD_SERVO_SLOTS = 15
 
 # Redisサーバー設定
-REDIS_HOST = "localhost"
-REDIS_PORT = 6379
-REDIS_KEY_READ = "meridis_calc_pub"   # <- Redis: 受信キー
-REDIS_KEY_WRITE = "meridis_real_pub"  # -> Redis: 送信キー
+VALKEY_HOST = "localhost"
+VALKEY_PORT = 6379
+VALKEY_KEY_READ  = "merikey_psclon_pub"   # <- Redis: 受信キー (PhysicalOnのsim状態を読む)
+VALKEY_KEY_WRITE = "merikey_psclon_sub"   # -> Redis: 送信キー (PhysicalOnがコマンドを読む)
 
 # マスターコマンド
 MRD_MASTER = 0                      # マスターコマンドのMeridim配列での位置
@@ -175,92 +181,92 @@ MCMD_EEPROM_PCTOBOARD_DATA1 = 10301  # EEPROMの[1][x]をPCからボードにMer
 MCMD_EEPROM_PCTOBOARD_DATA2 = 10302  # EEPROMの[2][x]をPCからボードにMeridimで送信する
 
 # ================================================================================================================
-# ---- Redis クラス (RedisReceiver / RedisTransfer) ---------------------------------------------------------------
+# ---- Redis クラス (ValkeyReceiver / ValkeyTransfer) ---------------------------------------------------------------
 # ================================================================================================================
 
-class RedisReceiver:
+class ValkeyReceiver:
     """Redisからhash形式でデータを受信するクラス。"""
-    def __init__(self, host=REDIS_HOST, port=REDIS_PORT, redis_key=REDIS_KEY_READ,
+    def __init__(self, host=VALKEY_HOST, port=VALKEY_PORT, valkey_key=VALKEY_KEY_READ,
                  connect_timeout: float = 0.5, socket_timeout: float = 0.5):
         import socket as _socket
         self.host = host
         self.port = port
-        self.redis_key = redis_key
+        self.valkey_key = valkey_key
         self.is_connected = False
         self._sock_mod = _socket
-        self.redis_client = redis.Valkey(
+        self.valkey_client = valkey.Valkey(
             host=host, port=port, decode_responses=True,
             socket_connect_timeout=connect_timeout,
             socket_timeout=socket_timeout)
         try:
             conn = _socket.create_connection((host, port), timeout=connect_timeout)
             conn.close()
-            self.redis_client.ping()
+            self.valkey_client.ping()
             self.is_connected = True
         except Exception as e:
-            print(f"[RedisReceiver] Could not connect: {e}")
+            print(f"[ValkeyReceiver] Could not connect: {e}")
 
     def get_data(self, key=None):
         """指定キーからhash形式で90要素のfloatリストを取得して返す。失敗時はNone。"""
         if not self.is_connected:
             return None
-        redis_key = key if key is not None else self.redis_key
+        valkey_key = key if key is not None else self.valkey_key
         try:
-            data = self.redis_client.hgetall(redis_key)
+            data = self.valkey_client.hgetall(valkey_key)
             if not data:
-                print(f"[RedisReceiver] No data for key '{redis_key}'.")
+                print(f"[ValkeyReceiver] No data for key '{valkey_key}'.")
                 return None
             return [float(data[str(i)]) for i in range(len(data))]
-        except (redis.ConnectionError, KeyError, ValueError) as e:
-            print(f"[RedisReceiver] Error: {e}")
+        except (valkey.ConnectionError, KeyError, ValueError) as e:
+            print(f"[ValkeyReceiver] Error: {e}")
             return None
 
     def close(self):
-        if self.redis_client:
+        if self.valkey_client:
             try:
-                self.redis_client.close()
+                self.valkey_client.close()
             except Exception:
                 pass
 
 
-class RedisTransfer:
+class ValkeyTransfer:
     """Redisへhash形式でデータを送信するクラス。"""
-    def __init__(self, host=REDIS_HOST, port=REDIS_PORT, redis_key=REDIS_KEY_WRITE,
+    def __init__(self, host=VALKEY_HOST, port=VALKEY_PORT, valkey_key=VALKEY_KEY_WRITE,
                  connect_timeout: float = 0.5, socket_timeout: float = 0.5):
         import socket as _socket
         self.host = host
         self.port = port
-        self.redis_key = redis_key
+        self.valkey_key = valkey_key
         self.is_connected = False
-        self.redis_client = redis.Valkey(
+        self.valkey_client = valkey.Valkey(
             host=host, port=port, decode_responses=True,
             socket_connect_timeout=connect_timeout,
             socket_timeout=socket_timeout)
         try:
             conn = _socket.create_connection((host, port), timeout=connect_timeout)
             conn.close()
-            self.redis_client.ping()
+            self.valkey_client.ping()
             self.is_connected = True
-            if not self.redis_client.exists(redis_key):
-                self.redis_client.hset(redis_key, mapping={str(i): "0" for i in range(90)})
+            if not self.valkey_client.exists(valkey_key):
+                self.valkey_client.hset(valkey_key, mapping={str(i): "0" for i in range(90)})
         except Exception as e:
-            print(f"[RedisTransfer] Could not connect: {e}")
+            print(f"[ValkeyTransfer] Could not connect: {e}")
 
     def set_data(self, data, key=None):
         """90要素のリストをhash形式でRedisに書き込む。"""
         if not self.is_connected or data is None or len(data) != 90:
             return
-        redis_key = key if key is not None else self.redis_key
+        valkey_key = key if key is not None else self.valkey_key
         try:
             mapping = {str(i): str(float(v)) for i, v in enumerate(data)}
-            self.redis_client.hset(redis_key, mapping=mapping)
-        except redis.RedisError as e:
-            print(f"[RedisTransfer] Error: {e}")
+            self.valkey_client.hset(valkey_key, mapping=mapping)
+        except valkey.ValkeyError as e:
+            print(f"[ValkeyTransfer] Error: {e}")
 
     def close(self):
-        if self.redis_client:
+        if self.valkey_client:
             try:
-                self.redis_client.close()
+                self.valkey_client.close()
             except Exception:
                 pass
 
@@ -292,7 +298,7 @@ class MeridianConsole:
             [0], dtype=np.uint16)   # コンパネからのリモコン入力用
         self.pad_gamepad_buttons = np.array([0], dtype=np.uint16)  # ゲームパッドのボタンビットマスク
         self.pad_gamepad_axes = np.zeros(6, dtype=np.float64)      # LX,LY,RX,RY,L2,R2
-        self.pad_gamepad_player = -1   # -1=None, 0=Player1, ...
+        self.pad_gamepad_player = -1   # -1=None, 0=Pad1, ...
         self.pad_gamepad_connected = False
         self.s_meridim_motion_f = np.zeros(
             MSG_SIZE, dtype=float)      # PC側で作成したサーボ位置送信用
@@ -348,8 +354,8 @@ class MeridianConsole:
         self.flag_ros1_pub = 0                    # ROS1のjoint_statesのパブリッシュ
         self.flag_ros1_sub = 0                    # ROS1のjoint_statesのサブスクライブ
         self.flag_self_mode = False               # Selfモード: UDP受信を無視して100Hzで動作
-        self.flag_redis_pub = False               # RedisへのデータパブリッシュON/OFF
-        self.flag_redis_sub = False               # Redisデータのサブスクライブ
+        self.flag_valkey_pub = False               # RedisへのデータパブリッシュON/OFF
+        self.flag_valkey_sub = False               # Redisデータのサブスクライブ
         self.flag_set_flow_or_step = 1            # Meridianの循環を+:通常フロー, -:ステップ に切り替え
         self.flag_servo_zero = 0                  # 全サーボ位置をゼロリセット
         self.flag_stop_flow = False               # ステップモード中の待機フラグ
@@ -479,16 +485,48 @@ def _save_board_ip_config(updates, filepath):
         f.writelines(lines)
 
 
+_TOOL_PATH_KEYS = {
+    "valkey_server": "VALKEY_SERVER_CMD",
+    "valkey_cli": "VALKEY_CLI_CMD",
+    "docker": "DOCKER_CMD",
+}
+
+
+def _valid_executable(path: str) -> bool:
+    return bool(path) and os.path.isfile(path)
+
+
+def _remember_tool_path_board(cache_key: str, path: str) -> None:
+    board_key = _TOOL_PATH_KEYS.get(cache_key)
+    if not board_key or not path:
+        return
+    current = _load_board_ip_config(_BOARD_IP_FILE).get(board_key, "")
+    if current == path:
+        return
+    _save_board_ip_config({board_key: path}, _BOARD_IP_FILE)
+    print(f"[Config] Remembered tool path [{cache_key}]: {path}")
+
+
+def _resolve_cached_executable_board(cache_key: str, *names: str) -> str | None:
+    board_key = _TOOL_PATH_KEYS.get(cache_key, "")
+    if board_key:
+        cached = _load_board_ip_config(_BOARD_IP_FILE).get(board_key, "")
+        if _valid_executable(cached):
+            return cached
+    for name in names:
+        found = shutil.which(name)
+        if found:
+            _remember_tool_path_board(cache_key, found)
+            return found
+    return None
+
+
 def select_console_mode():
     """起動時にメインかサブかを選択する。
     Returns: 0=Main, 1=Sub#1, 2=Sub#2, ...
     """
-    print("=" * 52)
-    print("  Meridian Console Startup")
-    print(f"  [Enter / y / 0 = Main]  [1..{UDP_SUB_PORT_MAX} = Sub]")
-    print("=" * 52)
     while True:
-        val = input("Start as Main or Sub? > ").strip().lower()
+        val = input(f"Start as Main(Enter) or Sub(1-{UDP_SUB_PORT_MAX})? ").strip().lower()
         if val in ('', 'y', 'yes', '0', 'main'):
             print("Starting as Main console.\n")
             return 0
@@ -1482,6 +1520,7 @@ else:
         select_sub_network_and_port(_console_sub_num)
 UDP_SEND_IP = UDP_SEND_IP_DEF
 
+
 # ================================================================================================================
 # ---- メインループ ------------------------------------------------------------------------------------------------
 # ================================================================================================================
@@ -1492,34 +1531,65 @@ UDP_SEND_IP = UDP_SEND_IP_DEF
 mrd = MeridianConsole()  # Meridianデータのインスタンス
 if _console_sub_num > 0:
     mrd.is_sub_mode = True
-    mrd.pad_gamepad_player = _console_sub_num  # サブ#N → joystickインデックスN (Player N+1)
-redis_receiver = RedisReceiver(host=REDIS_HOST, port=REDIS_PORT, redis_key=REDIS_KEY_READ)
-redis_transfer = RedisTransfer(host=REDIS_HOST, port=REDIS_PORT, redis_key=REDIS_KEY_WRITE)
+    mrd.pad_gamepad_player = _console_sub_num  # サブ#N → joystickインデックスN (Pad N+1)
+# Gamepad detection: pump events so SDL2 enumerates HID devices before get_count()
+_gamepad_at_launch = False
+if _pygame_available:
+    try:
+        _pygame.event.pump()
+        _gamepad_at_launch = _pygame.joystick.get_count() > 0
+    except Exception:
+        pass
+if _console_sub_num == 0 and _gamepad_at_launch:
+    mrd.pad_gamepad_player = 0  # Main console: auto-select Pad 1
+valkey_receiver = ValkeyReceiver(host=VALKEY_HOST, port=VALKEY_PORT, valkey_key=VALKEY_KEY_READ)
+valkey_transfer = ValkeyTransfer(host=VALKEY_HOST, port=VALKEY_PORT, valkey_key=VALKEY_KEY_WRITE)
 
+
+_fetch_log_count = 0  # fetch_redis_data ログ抑制用カウンタ
 
 def fetch_redis_data():
-    """<- Redis: meridis_calc_pub からhash形式でデータを受信してs_meridimに反映する。"""
-    if not mrd.flag_redis_sub:
+    """<- Redis: PhysicalOn(merikey_psclon_pub)からデータを受信してr_meridimに反映する。"""
+    global _fetch_log_count
+    if not mrd.flag_valkey_sub:
         return
     if mrd.flag_ros1_sub:
         return
-    data = redis_receiver.get_data()
+    data = valkey_receiver.get_data()
     if data is None or len(data) != 90:
         return
-    for i in range(21, 81, 2):
-        mrd.s_meridim[i] = int(data[i] * 100)
+    _fetch_log_count += 1
+    if _fetch_log_count % 100 == 1:  # 100フレームに1回ログ出力
+        print(f"[fetch_redis] key={valkey_receiver.valkey_key}  joint[21]={data[21]:.2f}deg  imu[2]={data[2]:.3f}")
+    _d = np.array(data, dtype=np.float64) * 100.0
+    # IMUデータ (加速度・角速度・roll/pitch/yaw) をr_meridimへ
+    mrd.r_meridim[2:8]        = _d[2:8].astype(np.int16)
+    mrd.r_meridim[[12,13,14]] = _d[[12,13,14]].astype(np.int16)
+    # 関節角度 (奇数インデックス[21..79]) をr_meridimへ
+    mrd.r_meridim[21:81:2]    = _d[21:81:2].astype(np.int16)
+    # 部分上書き後にチェックサムを再計算し、メインループのチェックサム検証を通す
+    # (fetch_redis_data はチェックサムOKブロック内で呼ばれるため、
+    #  再計算しないと次フレームからブロックが永続的にスキップされる)
+    mrd.r_meridim[MSG_SIZE-1] = np.int16(~np.sum(mrd.r_meridim[:MSG_SIZE-1], dtype=np.int16))
 
+
+_send_log_count = 0  # send_redis_data ログ抑制用カウンタ
 
 def send_redis_data():
-    """-> Redis: Axis MonitorのTarget/Actualに連動してs_meridim/r_meridimをchecksum付きで書き込む。"""
-    if not mrd.flag_redis_pub:
+    """-> Redis: s_meridimをmerikey_psclon_subに書き込む（コマンド値を常に送信）"""
+    global _send_log_count
+    if not mrd.flag_valkey_pub:
         return
-    src = mrd.s_meridim if mrd.flag_display_mode else mrd.r_meridim
+    src = mrd.s_meridim  # 常にコマンド値(s_meridim)を送信
+    _send_log_count += 1
+    if _send_log_count % 100 == 1:
+        print(f"[send_redis]  key={valkey_transfer.valkey_key}  joint[21]={int(src[21])}(×100)  pad[15]={int(src[15])}")
     s_int16 = np.array(src[:MSG_SIZE-1], dtype=np.int16)
     checksum = np.int16(~np.sum(s_int16, dtype=np.int16))
-    data = [float(v) / 100.0 for v in src[:MSG_SIZE-1]]
-    data.append(float(checksum))
-    redis_transfer.set_data(data)
+    _payload = np.empty(MSG_SIZE, dtype=np.float64)
+    _payload[:MSG_SIZE-1] = s_int16 / 100.0
+    _payload[MSG_SIZE-1]  = float(checksum)
+    valkey_transfer.set_data(_payload.tolist())
 
 
 def meridian_loop():
@@ -1573,16 +1643,18 @@ def meridian_loop():
 # [ 1 ] : UDPデータの受信
 # ------------------------------------------------------------------------
                 if mrd.flag_self_mode:
-# [ 1-Self ] : Selfモード: UDP受信を無視し s_meridim を r_meridim にコピーして 100Hz 動作
+# [ 1-Self ] : Selfモード: UDP受信を無視して 100Hz 動作
                     if not _prev_self_mode:
                         # Self mode 開始: 絶対フレームタイマーを現在時刻から初期化
                         _self_next_frame_time = _loop_start + 0.01
-                    # [4-1]のチェックサム検証を通過させるためコピー前にチェックサムを計算
-                    mrd.s_meridim[MSG_SIZE-1] = np.int16(~np.sum(mrd.s_meridim[:MSG_SIZE-1], dtype=np.int16))
-                    _self_bin = mrd.s_meridim.tobytes()  # tobytes()でnumpy→bytes直接変換(structより高速)
-                    mrd.r_meridim = struct.unpack('90h', _self_bin)
-                    mrd.r_meridim_ushort = struct.unpack('90H', _self_bin)
-                    mrd.r_meridim_char = struct.unpack('180b', _self_bin)
+                    if not mrd.flag_valkey_pub:
+                        # Valkey送信が無効のときのみ s_meridim → r_meridim フィードバックループ
+                        # (Valkey有効時はPhysicalOnからの受信(fetch_redis_data)がr_meridimを担う)
+                        mrd.s_meridim[MSG_SIZE-1] = np.int16(~np.sum(mrd.s_meridim[:MSG_SIZE-1], dtype=np.int16))
+                        _self_bin = mrd.s_meridim.tobytes()
+                        mrd.r_meridim = np.frombuffer(_self_bin, dtype=np.int16).copy()
+                        mrd.r_meridim_ushort = struct.unpack('90H', _self_bin)
+                        mrd.r_meridim_char = struct.unpack('180b', _self_bin)
                     mrd.message1 = "Self mode: 100Hz (no UDP)"
                     _prev_self_mode = True
                 else:
@@ -1606,7 +1678,7 @@ def meridian_loop():
 
 # [ 1-2 ] : 受信UDPデータの変換
                     # 受信データをshort型のMeridim90に変換
-                    mrd.r_meridim = struct.unpack('90h', _r_bin_data)
+                    mrd.r_meridim = np.frombuffer(bytes(_r_bin_data), dtype=np.int16).copy()
                     mrd.r_meridim_ushort = struct.unpack(
                         '90H', _r_bin_data)  # unsignedshort型
                     mrd.r_meridim_char = struct.unpack('180b', _r_bin_data)
@@ -1638,12 +1710,12 @@ def meridian_loop():
                 # 受信データに対するチェックサム値の計算
                 _checksum[0] = np.int16(
                     ~np.sum(mrd.r_meridim[:MSG_SIZE-1], dtype=np.int16))
-                _temp_int16 = np.int16(0)  # エラーフラグのカウント用変数
+                _temp_int16 = 0  # エラーフラグのカウント用変数 (Python int: 大きなビットマスクに対応)
 
                 if _checksum[0] != mrd.r_meridim[MSG_SIZE-1]:  # チェックサムがNGの処理
                     # エラーフラグ15ビット目:PCのUDP受信エラーフラグを上げる
                     _temp_int16 = (
-                        mrd.r_meridim[MSG_ERRS] & 0xFFFF) | 0b1000000000000000
+                        int(mrd.r_meridim[MSG_ERRS]) & 0xFFFF) | 0b1000000000000000
                     mrd.error_count_esp_to_pc += 1  # PCのUDP受信エラーをカウントアップ
 
 # [ 2-2 ] : チェックサムOKデータのエラーフラグ処理
@@ -1668,7 +1740,7 @@ def meridian_loop():
                     if (mrd.r_meridim[MSG_ERRS] >> 9 & 1) == 1:
                         mrd.error_count_tsy_skip += 1
                     # サーボ値の受信に失敗したサーボID(エラーフラグ下位8ビット)を調べる
-                    _temp_int16 = mrd.r_meridim[MSG_ERRS] & 0b0000000011111111
+                    _temp_int16 = int(mrd.r_meridim[MSG_ERRS]) & 0b0000000011111111
                     mrd.error_servo_id_past = mrd.error_servo_id
                     if _temp_int16 > 0:
                         mrd.error_count_servo_skip += 1
@@ -1692,7 +1764,7 @@ def meridian_loop():
 
 # [ 2-4 ] : 末端処理
                     # エラーフラグ15ビット目(PCのUDP受信エラーフラグ)を下げる
-                    _temp_int16 = mrd.r_meridim[MSG_ERRS] & 0b0111111111111111
+                    _temp_int16 = int(mrd.r_meridim[MSG_ERRS]) & 0b0111111111111111
                     # フレームスキップチェック用のカウントの代入
                     mrd.frame_sync_r_recv = mrd.r_meridim_ushort[1]
 
@@ -1881,6 +1953,36 @@ def meridian_loop():
                             mrd.s_meridim[17] = 0  # アナログ2
                             mrd.s_meridim[18] = 0  # アナログ3
 
+    # [ 5-Bhv ] : Behaviorスクリプトとのデータ交換（スレッド+キュー方式）
+                        _is_bhv = dpg.get_value("behavior_enabled") if dpg.does_item_exist("behavior_enabled") else False
+                        if _is_bhv:
+                            # watchdog: スレッドが落ちていたらチェックを外す
+                            if _bhv_thread is None or not _bhv_thread.is_alive():
+                                dpg.set_value("behavior_enabled", False)
+                                _is_bhv = False
+                        if _is_bhv:
+                            # -> bhv_in: (r_snap, s_snap) タプルをキューに送信
+                            _r_snap = mrd.r_meridim[:MSG_SIZE].copy()
+                            _s_snap = mrd.s_meridim[:MSG_SIZE].copy()
+                            _bhv_in_data = (_r_snap, _s_snap)
+                            try:
+                                _bhv_in_queue.put_nowait(_bhv_in_data)
+                            except queue.Full:
+                                try:
+                                    _bhv_in_queue.get_nowait()
+                                except queue.Empty:
+                                    pass
+                                _bhv_in_queue.put_nowait(_bhv_in_data)
+                            # <- bhv_out: キューからサーボ値をs_meridimに反映
+                            try:
+                                _bhv_out_data = _bhv_out_queue.get_nowait()
+                                mrd.s_meridim[21:81:2] = np.array(_bhv_out_data, dtype=np.int16)[21:81:2]
+                            except queue.Empty:
+                                pass
+                        # status text 更新（スレッドからの通知をGUIに反映）
+                        if dpg.does_item_exist("behavior_status_text") and _bhv_status_msg:
+                            dpg.set_value("behavior_status_text", _bhv_status_msg)
+
     # [ 5-6 ] : 送信マスターコマンドの作成
                         mrd.s_meridim[0] = MSG_SIZE  # デフォルト値を格納
 
@@ -2042,7 +2144,10 @@ def meridian_loop():
 
 # ctrl+cで終了したときにも確実にソケットを閉じる試み(いまのところ機能していないかも)
 def cleanup():
+    _stop_behavior_thread()
     print("Meridan_console quited.")
+
+atexit.register(cleanup)
 
 
 # フラグ切り替え用の真偽反転
@@ -2176,6 +2281,155 @@ def pad_btn_panel_on(sender, app_data, user_data):
 # [sensor monitor] ウィンドウのSetYawボタン処理
 def set_yaw_center():  # IMUのヨー軸センターリセットフラグをcommand_send_trial回上げる(コマンドをcommand_send_trial回送信する)
     mrd.flag_update_yaw = mrd.command_send_trial
+
+
+# [behavior] ウィンドウのBrowseボタン処理
+_behavior_full_path = ""  # 起動後に_behavior_script_defaultで上書き
+
+
+def behavior_file_attached(sender, app_data):
+    """DPGファイルダイアログのコールバック: フルパスを保存、テキストボックスにはファイル名のみ表示。"""
+    global _behavior_full_path
+    full_path = app_data.get('file_path_name', '') if isinstance(app_data, dict) else ''
+    if not full_path:
+        return
+    _behavior_full_path = full_path
+    dpg.set_value("behavior_script_path", os.path.basename(full_path))
+    _save_board_ip_config({"BEHAVIOR_SCRIPT_PATH": full_path}, _BOARD_IP_FILE)
+
+
+def browse_behavior_script():
+    """Browseボタン: osascript 経由でOS標準のファイル選択ダイアログを表示。"""
+    init_dir = (os.path.dirname(_behavior_full_path)
+                if _behavior_full_path else os.path.expanduser("~"))
+    result = subprocess.run(
+        [
+            "osascript", "-e",
+            f'POSIX path of (choose file with prompt "Select Logic Cartridge Script"'
+            f' default location POSIX file "{init_dir}")',
+        ],
+        capture_output=True,
+        text=True,
+    )
+    path = result.stdout.strip()
+    if path:
+        behavior_file_attached(None, {"file_path_name": path})
+
+
+def reload_behavior_script():
+    """Reloadボタン: アタッチ済みスクリプトをディスクから再読み込みして最新コードを反映する。
+    BHVスレッドが稼働中の場合は停止→再起動することで exec_module を再実行する。
+    """
+    if not _behavior_full_path:
+        print("[Behavior] No script attached.")
+        return
+    is_running = (dpg.get_value("behavior_enabled")
+                  if dpg.does_item_exist("behavior_enabled") else False)
+    if is_running:
+        _set_bhv_status("Reloading...")
+        _stop_behavior_thread()
+        _start_behavior_thread()
+        print(f"[Behavior] Reloaded: {_behavior_full_path}")
+    else:
+        print(f"[Behavior] Script ready (will load on next enable): {_behavior_full_path}")
+
+
+# [behavior] スレッド管理
+_bhv_thread:    threading.Thread | None = None
+_bhv_running:   bool  = False
+_bhv_in_queue:  queue.Queue = queue.Queue(maxsize=1)
+_bhv_out_queue: queue.Queue = queue.Queue(maxsize=1)
+_bhv_status_msg: str = ""   # スレッドが書き込み → メインループが読んでGUI更新
+
+
+def _set_bhv_status(msg: str) -> None:
+    global _bhv_status_msg
+    _bhv_status_msg = msg
+
+
+def _bhv_thread_func(script_path: str) -> None:
+    global _bhv_running
+    try:
+        spec = importlib.util.spec_from_file_location("_behaviour_mod", script_path)
+        mod  = importlib.util.module_from_spec(spec)
+        script_dir = os.path.dirname(os.path.abspath(script_path))
+        if script_dir not in sys.path:
+            sys.path.insert(0, script_dir)
+        spec.loader.exec_module(mod)
+
+        if hasattr(mod, "setup"):
+            mod.setup()
+
+        _set_bhv_status("Running...")
+
+        while _bhv_running:
+            try:
+                r, s = _bhv_in_queue.get(timeout=0.05)
+            except queue.Empty:
+                continue
+            try:
+                s = mod.update(r, s)
+            except Exception as e:
+                _set_bhv_status(f"update() error: {e}")
+                _bhv_running = False
+                break
+            try:
+                _bhv_out_queue.put_nowait(s)
+            except queue.Full:
+                try:
+                    _bhv_out_queue.get_nowait()
+                except queue.Empty:
+                    pass
+                _bhv_out_queue.put_nowait(s)
+
+    except Exception as e:
+        _set_bhv_status(f"Error: {e}")
+        _bhv_running = False
+
+
+def _start_behavior_thread() -> None:
+    global _bhv_thread, _bhv_running
+    _stop_behavior_thread()
+    if not _behavior_full_path:
+        print("[Behavior] No script attached.")
+        return
+    _bhv_running = True
+    _set_bhv_status("Starting...")
+    _bhv_thread = threading.Thread(
+        target=_bhv_thread_func, args=(_behavior_full_path,), daemon=True
+    )
+    _bhv_thread.start()
+    print(f"[Behavior] Thread started: {_behavior_full_path}")
+
+
+def _stop_behavior_thread() -> None:
+    global _bhv_thread, _bhv_running
+    _bhv_running = False
+    if _bhv_thread and _bhv_thread.is_alive():
+        _bhv_thread.join(timeout=2.0)
+    _bhv_thread = None
+    _set_bhv_status("")
+    for q in (_bhv_in_queue, _bhv_out_queue):
+        while not q.empty():
+            try:
+                q.get_nowait()
+            except queue.Empty:
+                break
+    print("[Behavior] Thread stopped.")
+
+
+def set_behavior_enabled(sender, app_data, user_data):
+    """behavior_enabledチェックボックスのコールバック: スレッドの起動/停止。"""
+    if app_data:
+        if not _behavior_full_path:
+            dpg.set_value("behavior_enabled", False)
+            print("[Behavior] No script attached. Attach a script before enabling.")
+            return
+        _start_behavior_thread()
+    else:
+        _stop_behavior_thread()
+        if dpg.does_item_exist("behavior_status_text"):
+            dpg.set_value("behavior_status_text", "")
 
 
 # [command] ウィンドウのPowerフラグ処理(サーボのオンオフ)
@@ -2350,26 +2604,162 @@ def send_data_step_frame():
 
 def redis_pub():
     """RedisへのパブリッシュをON/OFF"""
-    if mrd.flag_redis_pub:
-        mrd.flag_redis_pub = False
+    if mrd.flag_valkey_pub:
+        mrd.flag_valkey_pub = False
     else:
-        mrd.flag_redis_pub = True
+        mrd.flag_valkey_pub = True
 
 
 def redis_sub():
     """RedisのサブスクライブをON/OFF"""
-    if mrd.flag_redis_sub:
-        mrd.flag_redis_sub = False
+    if mrd.flag_valkey_sub:
+        mrd.flag_valkey_sub = False
     else:
-        mrd.flag_redis_sub = True
+        mrd.flag_valkey_sub = True
 
 
 # ---- Valkey Connect ウィンドウ用 -----------------------------------------------------------------------
 
 _BOARD_IP_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "board_ip.txt")
-_VALKEY_DEFAULT_KEYS = ["merikey_real_pub", "meridis_real_pub"]
-_VALKEY_SERVER = "/opt/homebrew/bin/valkey-server"
-_VALKEY_CLI    = "/opt/homebrew/bin/valkey-cli"
+_VALKEY_DEFAULT_KEYS = ["merikey_psclon_sub", "merikey_psclon_pub"]
+_VALKEY_DOCKER_NAME = "meridian-valkey"
+_VALKEY_DOCKER_IMAGE = "valkey/valkey"
+_valkey_docker_managed = False
+_valkey_starting = False
+
+
+def _resolve_valkey_server_cmd() -> str | None:
+    return _resolve_cached_executable_board("valkey_server", "valkey-server", "redis-server")
+
+
+def _resolve_valkey_cli_cmd() -> str | None:
+    return _resolve_cached_executable_board("valkey_cli", "valkey-cli", "redis-cli")
+
+
+def _resolve_docker_cmd() -> str | None:
+    return _resolve_cached_executable_board("docker", "docker")
+
+
+def _docker_daemon_ready() -> bool:
+    docker = _resolve_docker_cmd()
+    if not docker:
+        return False
+    try:
+        result = subprocess.run([docker, "info"], capture_output=True, timeout=12)
+        return result.returncode == 0
+    except Exception:
+        return False
+
+
+def _try_start_docker_service() -> bool:
+    commands: list[list[str]] = []
+    if sys.platform == "win32":
+        cmd_exe = shutil.which("cmd")
+        if cmd_exe:
+            commands.append([cmd_exe, "/c", "start", "", "Docker Desktop"])
+    elif sys.platform == "darwin":
+        open_exe = shutil.which("open")
+        if open_exe:
+            commands.append([open_exe, "-a", "Docker"])
+            commands.append([open_exe, "-a", "Docker Desktop"])
+    else:
+        for name, args in (
+            ("systemctl", ["--user", "start", "docker-desktop"]),
+            ("systemctl", ["start", "docker"]),
+            ("service", ["docker", "start"]),
+        ):
+            exe = shutil.which(name)
+            if exe:
+                commands.append([exe, *args])
+    for cmd in commands:
+        try:
+            subprocess.run(cmd, capture_output=True, timeout=20)
+            print(f"[Valkey] Tried to start Docker via: {' '.join(cmd)}")
+            return True
+        except Exception:
+            pass
+    return False
+
+
+def _wait_for_docker_daemon(timeout: float = 90.0) -> bool:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if _docker_daemon_ready():
+            return True
+        time.sleep(2.0)
+    return False
+
+
+def _valkey_ping() -> bool:
+    try:
+        client = valkey.Valkey(host=VALKEY_HOST, port=VALKEY_PORT, socket_connect_timeout=0.5)
+        ok = client.ping()
+        client.close()
+        return bool(ok)
+    except Exception:
+        return False
+
+
+def _valkey_start_docker_container() -> bool:
+    """Start Valkey in Docker. Returns True when server responds to ping."""
+    global _valkey_docker_managed
+    docker = _resolve_docker_cmd()
+    if not docker:
+        print("[Valkey] docker not found in PATH.")
+        return False
+    if not _docker_daemon_ready():
+        print("[Valkey] Starting Docker...")
+        _try_start_docker_service()
+        if not _wait_for_docker_daemon():
+            print("[Valkey] Docker daemon not ready.")
+            return False
+    inspect = subprocess.run(
+        [docker, "inspect", "-f", "{{.State.Running}}", _VALKEY_DOCKER_NAME],
+        capture_output=True, text=True, timeout=15,
+    )
+    if inspect.returncode == 0:
+        if inspect.stdout.strip().lower() != "true":
+            start = subprocess.run(
+                [docker, "start", _VALKEY_DOCKER_NAME],
+                capture_output=True, text=True, timeout=30,
+            )
+            if start.returncode != 0:
+                err = (start.stderr or start.stdout or "docker start failed").strip()
+                print(f"[Valkey] {err}")
+                return False
+    else:
+        run = subprocess.run(
+            [
+                docker, "run", "-d",
+                "--name", _VALKEY_DOCKER_NAME,
+                "-p", f"{VALKEY_PORT}:6379",
+                _VALKEY_DOCKER_IMAGE,
+                "valkey-server", "--save", "",
+            ],
+            capture_output=True, text=True, timeout=180,
+        )
+        if run.returncode != 0:
+            err = (run.stderr or run.stdout or "docker run failed").strip()
+            print(f"[Valkey] {err}")
+            return False
+    for _ in range(40):
+        if _valkey_ping():
+            _valkey_docker_managed = True
+            print(f"[Valkey] Ready via Docker container '{_VALKEY_DOCKER_NAME}'")
+            return True
+        time.sleep(0.5)
+    print("[Valkey] Docker container started but not responding yet.")
+    return False
+
+
+_behavior_script_default = _load_board_ip_config(_BOARD_IP_FILE).get("BEHAVIOR_SCRIPT_PATH", "")
+if _gamepad_at_launch and _behavior_script_default:
+    _behavior_full_path = _behavior_script_default
+    print(f"[Gamepad] Detected. Logic Cartridge: {os.path.basename(_behavior_script_default)}")
+else:
+    _behavior_full_path = ""
+    if not _gamepad_at_launch:
+        print("[Gamepad] Not detected. Logic Cartridge: None")
 
 
 def _valkey_load_keys():
@@ -2409,60 +2799,60 @@ def _valkey_save_keys(keys):
 def valkey_start():
     """Valkeyサーバーをバックグラウンドで起動し、Publishキーを hset 初期化。"""
     def _run():
+        global _valkey_starting
         try:
-            # 既に起動中であればサーバー起動をスキップ
-            try:
-                _c = redis.Valkey(host=REDIS_HOST, port=REDIS_PORT,
-                                  socket_connect_timeout=0.5)
-                _c.ping()
-                _c.close()
+            if _valkey_ping():
                 print("[Valkey] Server already running. Skipping start.")
-                _init_keys()  # _reconnect_transfer() も内部で呼ばれる
+                _init_keys()
                 _valkey_update_status()
                 return
-            except Exception:
-                pass
 
-            cmd = f'{_VALKEY_SERVER} --save "" --dir /tmp --dbfilename valkey_meridis.rdb'
-            proc = subprocess.Popen(cmd, shell=True,
-                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                                    start_new_session=True)
-            print(f"[Valkey] Server starting (PID {proc.pid})...")
-            # 起動完了を最大5秒待つ
-            for _ in range(50):
-                time.sleep(0.1)
-                if proc.poll() is not None:
-                    print(f"[Valkey] Server exited early (rc={proc.returncode}).")
+            server_cmd = _resolve_valkey_server_cmd()
+            if server_cmd:
+                proc = subprocess.Popen(
+                    [server_cmd, "--save", "", "--dir", "/tmp",
+                     "--dbfilename", "valkey_meridis.rdb"],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                    start_new_session=True,
+                )
+                print(f"[Valkey] Server starting (PID {proc.pid})...")
+                for _ in range(50):
+                    time.sleep(0.1)
+                    if proc.poll() is not None:
+                        print(f"[Valkey] Server exited early (rc={proc.returncode}).")
+                        _valkey_update_status()
+                        return
+                    if _valkey_ping():
+                        break
+                else:
+                    print("[Valkey] Server did not respond within 5s.")
+                    _valkey_update_status()
                     return
-                try:
-                    client = redis.Valkey(host=REDIS_HOST, port=REDIS_PORT,
-                                         socket_connect_timeout=0.3)
-                    client.ping()
-                    client.close()
-                    break
-                except Exception:
-                    continue
-            else:
-                print("[Valkey] Server did not respond within 5s.")
+            elif not _valkey_start_docker_container():
+                print("[Valkey] valkey-server not found and Docker start failed.")
+                _valkey_update_status()
                 return
+
             _init_keys()
             _valkey_update_status()
         except Exception as e:
             print(f"[Valkey] Start error: {e}")
             _valkey_update_status()
+        finally:
+            _valkey_starting = False
 
     def _reconnect_transfer():
-        """redis_transfer が未接続なら再接続を試みる。"""
-        if not redis_transfer.is_connected:
+        """valkey_transfer が未接続なら再接続を試みる。"""
+        if not valkey_transfer.is_connected:
             try:
-                redis_transfer.redis_client.ping()
-                redis_transfer.is_connected = True
+                valkey_transfer.valkey_client.ping()
+                valkey_transfer.is_connected = True
             except Exception:
                 pass
 
     def _init_keys():
         keys = list(dpg.get_item_configuration("connect_publish_combo")["items"])
-        client = redis.Valkey(host=REDIS_HOST, port=REDIS_PORT, decode_responses=True)
+        client = valkey.Valkey(host=VALKEY_HOST, port=VALKEY_PORT, decode_responses=True)
         for key in keys:
             if not client.exists(key):
                 client.hset(key, mapping={str(i): "0" for i in range(90)})
@@ -2470,13 +2860,17 @@ def valkey_start():
         client.close()
         _reconnect_transfer()
 
+    if _valkey_starting:
+        print("[Valkey] Already starting...")
+        return
+    _valkey_starting = True
     threading.Thread(target=_run, daemon=True).start()
 
 
 def valkey_reset():
     """Valkey の全データをフラッシュ。"""
     try:
-        client = redis.Valkey(host=REDIS_HOST, port=REDIS_PORT, decode_responses=True,
+        client = valkey.Valkey(host=VALKEY_HOST, port=VALKEY_PORT, decode_responses=True,
                               socket_connect_timeout=1.0)
         client.flushall()
         client.close()
@@ -2487,11 +2881,28 @@ def valkey_reset():
 
 def valkey_shutdown():
     """Valkey サーバーをシャットダウン。"""
-    for cmd in [[_VALKEY_CLI, 'shutdown'], ['redis-cli', 'shutdown']]:
+    global _valkey_docker_managed
+    if _valkey_docker_managed:
+        docker = _resolve_docker_cmd()
+        if docker:
+            try:
+                subprocess.run([docker, "stop", _VALKEY_DOCKER_NAME],
+                               capture_output=True, timeout=30)
+                print(f"[Valkey] Stopped Docker container '{_VALKEY_DOCKER_NAME}'.")
+                _valkey_docker_managed = False
+                threading.Thread(target=lambda: (time.sleep(0.5), _valkey_update_status()),
+                                 daemon=True).start()
+                return
+            except Exception as e:
+                print(f"[Valkey] Docker stop error: {e}")
+    for name in ("valkey-cli", "redis-cli"):
+        cli = shutil.which(name)
+        if not cli:
+            continue
         try:
-            subprocess.run(cmd, timeout=3,
+            subprocess.run([cli, "shutdown"], timeout=3,
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            print(f"[Valkey] Shutdown via {cmd[0]}.")
+            print(f"[Valkey] Shutdown via {cli}.")
             threading.Thread(target=lambda: (time.sleep(0.5), _valkey_update_status()),
                              daemon=True).start()
             return
@@ -2502,14 +2913,14 @@ def valkey_shutdown():
 
 
 def valkey_publish_changed(sender, app_data):
-    """Publishドロップダウン変更: redis_transfer の書き込み先キーを切り替え。"""
-    redis_transfer.redis_key = app_data
+    """Publishドロップダウン変更: valkey_transfer の書き込み先キーを切り替え。"""
+    valkey_transfer.valkey_key = app_data
     print(f"[Valkey] Publish key → '{app_data}'")
 
 
 def valkey_subscribe_changed(sender, app_data):
-    """Subscribeドロップダウン変更: redis_receiver の受信先キーを切り替え。"""
-    redis_receiver.redis_key = app_data
+    """Subscribeドロップダウン変更: valkey_receiver の受信先キーを切り替え。"""
+    valkey_receiver.valkey_key = app_data
     print(f"[Valkey] Subscribe key → '{app_data}'")
 
 
@@ -2537,7 +2948,7 @@ def valkey_key_del():
         dpg.configure_item("connect_subscribe_combo", items=items)
         new_sel = items[0] if items else ""
         dpg.set_value("connect_publish_combo", new_sel)
-        redis_transfer.redis_key = new_sel
+        valkey_transfer.valkey_key = new_sel
         _valkey_save_keys(items)
         print(f"[Valkey] Key removed: '{selected}'")
 
@@ -2545,7 +2956,7 @@ def valkey_key_del():
 def valkey_keys_refresh():
     """Valkeyの KEYS * を取得してモーダルのテキストを更新。"""
     try:
-        client = redis.Valkey(host=REDIS_HOST, port=REDIS_PORT,
+        client = valkey.Valkey(host=VALKEY_HOST, port=VALKEY_PORT,
                               socket_connect_timeout=0.5, decode_responses=True)
         keys = sorted(client.keys('*'))
         client.close()
@@ -2573,7 +2984,7 @@ def _valkey_close_disp_keys():
             dpg.set_value("connect_subscribe_combo", current)
         else:
             dpg.set_value("connect_subscribe_combo", keys[0])
-            redis_receiver.redis_key = keys[0]
+            valkey_receiver.valkey_key = keys[0]
     dpg.configure_item("valkey_keys_modal", show=False)
 
 
@@ -2582,7 +2993,7 @@ def _valkey_close_disp_keys():
 def _valkey_check_online():
     """Port 6379 へのTCP接続でValkeyの起動状態を確認(軽量)。"""
     try:
-        conn = socket.create_connection(("127.0.0.1", REDIS_PORT), timeout=0.2)
+        conn = socket.create_connection(("127.0.0.1", VALKEY_PORT), timeout=0.2)
         conn.close()
         return True
     except Exception:
@@ -2637,9 +3048,9 @@ _gamepad_joysticks: dict = {}  # {index: pygame.joystick.Joystick}
 
 def pad_player_changed(sender, app_data, user_data):
     """プレイヤー選択プルダウンのコールバック。"""
-    items = ["None", "Player 1", "Player 2", "Player 3", "Player 4", "Player 5", "Player 6"]
+    items = ["None", "Pad 1", "Pad 2", "Pad 3", "Pad 4", "Pad 5", "Pad 6"]
     try:
-        idx = items.index(app_data) - 1  # "None"=-1, "Player 1"=0, ...
+        idx = items.index(app_data) - 1  # "None"=-1, "Pad 1"=0, ...
     except ValueError:
         idx = -1
     mrd.pad_gamepad_player = idx
@@ -2737,8 +3148,8 @@ def main():
 
         # dpg描画処理1 ==========================================================
         dpg.create_context()
-        # dpg.create_viewport(title=TITLE_VERSION, width=853, height=540) #mac/ubuntu
-        dpg.create_viewport(title=TITLE_VERSION, width=870, height=580)  # win
+        # dpg.create_viewport(title=TITLE_VERSION, width=853, height=590) #mac/ubuntu
+        dpg.create_viewport(title=TITLE_VERSION, width=870, height=670)  # win
 
 
 # ------------------------------------------------------------------------
@@ -2778,6 +3189,27 @@ def main():
             dpg.add_text(mrd.message2, tag="DispMessage2")
             dpg.add_text(mrd.message3, tag="DispMessage3")
             dpg.add_text(mrd.message4, tag="DispMessage4")
+
+# ------------------------------------------------------------------------
+# [ Behavior ] : ビヘイビアウィンドウ(Messegeの下)
+# ------------------------------------------------------------------------
+        _behavior_display = (os.path.basename(_behavior_full_path)
+                             if _behavior_full_path else "")
+        with dpg.window(label="Logic Cartridge", width=590, height=90, pos=[5, 540],
+                        min_size=[1, 1]):
+            dpg.add_checkbox(tag="behavior_enabled", pos=[8, 31],
+                             callback=set_behavior_enabled)
+            dpg.add_text("Python Code:", pos=[31, 31])
+            dpg.add_input_text(tag="behavior_script_path",
+                               default_value=_behavior_display,
+                               hint="Attach Logic Cartridge file",
+                               width=280, pos=[126, 29])
+            dpg.add_button(label="Browse", callback=browse_behavior_script,
+                           width=60, pos=[415, 29])
+            dpg.add_button(label="Reload", callback=reload_behavior_script,
+                           width=65, pos=[482, 29])
+            dpg.add_text(tag="behavior_status_text", default_value="",
+                         pos=[8, 55])
 
 # ------------------------------------------------------------------------
 # [ Sensor Monitor ] : センサー値モニタリング用ウィンドウ(表示位置:上段/中央)
@@ -2863,11 +3295,12 @@ def main():
         with dpg.window(label="Button Input", width=248, height=155, pos=[600, 5]):
             dpg.add_text("Pad Not connected", tag="pad_status_text",
                          color=(128, 128, 128, 255), pos=[62, 20])
-            _pad_default = (f"Player {_console_sub_num + 1}"
-                            if _console_sub_num > 0 else "None")
+            _pad_default = (f"Pad {_console_sub_num + 1}"
+                            if _console_sub_num > 0
+                            else ("Pad 1" if _gamepad_at_launch else "None"))
             dpg.add_combo(tag="pad_player_combo",
-                          items=["None", "Player 1", "Player 2", "Player 3",
-                                 "Player 4", "Player 5", "Player 6"],
+                          items=["None", "Pad 1", "Pad 2", "Pad 3",
+                                 "Pad 4", "Pad 5", "Pad 6"],
                           default_value=_pad_default,
                           width=130, pos=[59, 43], callback=pad_player_changed)
             dpg.add_checkbox(tag="Btn_L2",      callback=pad_btn_panel_on, user_data=256, pos=[15, 38])
@@ -2926,25 +3359,25 @@ def main():
             dpg.add_button(label="Start Valkey", width=95, pos=[10,  33], callback=valkey_start)
             dpg.add_button(label="Reset",         width=50, pos=[110, 33], callback=valkey_reset)
             dpg.add_button(label="Shutdown",      width=70, pos=[165, 33], callback=valkey_shutdown)
-            dpg.add_text("Publish",   pos=[10, 60])
+            dpg.add_text("Write to",  pos=[10, 60])
             dpg.add_combo(tag="connect_publish_combo", items=_vk_keys,
                           default_value=_vk_keys[0] if _vk_keys else "",
                           width=153, pos=[82, 57],
                           callback=valkey_publish_changed)
-            # 起動時にredis_transferの書き込み先をドロップダウン初期値に同期
-            redis_transfer.redis_key = _vk_keys[0] if _vk_keys else REDIS_KEY_WRITE
+            # 起動時にvalkey_transferの書き込み先をドロップダウン初期値に同期
+            valkey_transfer.valkey_key = _vk_keys[0] if _vk_keys else VALKEY_KEY_WRITE
             dpg.add_input_text(tag="connect_key_input", hint="key name",
                                width=145, pos=[10, 81])
             dpg.add_button(label="Add", width=35, pos=[160, 81], callback=valkey_key_add)
             dpg.add_button(label="Del", width=35, pos=[200, 81], callback=valkey_key_del)
-            dpg.add_text("Subscribe", pos=[10, 108])
+            dpg.add_text("Read from", pos=[10, 108])
             _vk_sub_default = _vk_keys[1] if len(_vk_keys) > 1 else (_vk_keys[0] if _vk_keys else "")
             dpg.add_combo(tag="connect_subscribe_combo", items=_vk_keys,
                           default_value=_vk_sub_default,
                           width=153, pos=[82, 105],
                           callback=valkey_subscribe_changed)
-            # 起動時にredis_receiverの受信先をドロップダウン初期値に同期
-            redis_receiver.redis_key = _vk_sub_default
+            # 起動時にvalkey_receiverの受信先をドロップダウン初期値に同期
+            valkey_receiver.valkey_key = _vk_sub_default
             dpg.add_text("Valkey Server Off", tag="valkey_status_text",
                          color=(128, 128, 128, 255), pos=[10, 132])
             dpg.add_button(label="Disp Keys", width=90, pos=[145, 129], callback=valkey_disp_keys)
